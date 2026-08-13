@@ -8,12 +8,13 @@ interface AuthState {
   profile: Profile | null
   loading: boolean
   isSuperAdmin: boolean
+  isOwner: boolean
   signOut: () => Promise<void>
   refreshProfile: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthState>({
-  session: null, profile: null, loading: true, isSuperAdmin: false,
+  session: null, profile: null, loading: true, isSuperAdmin: false, isOwner: false,
   signOut: async () => {}, refreshProfile: async () => {},
 })
 
@@ -50,7 +51,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         session,
         profile,
         loading,
-        isSuperAdmin: profile?.role === 'super_admin',
+        // mirrors the SQL-side is_super_admin(): the owner inherits super-admin
+        isSuperAdmin: profile?.role === 'super_admin' || profile?.role === 'platform_owner',
+        isOwner: profile?.role === 'platform_owner',
         signOut: async () => {
           await supabase.auth.signOut()
         },
