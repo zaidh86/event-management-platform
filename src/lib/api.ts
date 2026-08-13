@@ -1,12 +1,23 @@
 // Typed data-access helpers. Pages call these instead of building queries inline.
 import { supabase } from './supabase'
+import { normalizeCapabilities } from './capabilities'
 import type {
-  Activity, Announcement, EmpEvent, EventMember, LeaderboardRow,
-  Participant, Profile, QrResolution, Team, Transaction, TransactionType,
+  Activity, Announcement, Club, ClubMember, ClubRole, EmpEvent, EventMember,
+  LeaderboardRow, Participant, Profile, QrResolution, Team, Transaction, TransactionType,
 } from './types'
 
 function throwIf(error: { message: string } | null): void {
   if (error) throw new Error(error.message)
+}
+
+// Rows created before migrations 00005/00006 lack club_id/capabilities;
+// normalize at the boundary so EmpEvent is always fully populated.
+function toEvent(row: Record<string, unknown>): EmpEvent {
+  return {
+    ...(row as unknown as EmpEvent),
+    club_id: (row.club_id as string | undefined) ?? null,
+    capabilities: normalizeCapabilities(row.capabilities, row.is_team_event === true),
+  }
 }
 
 // ---- events ----------------------------------------------------------------
@@ -15,19 +26,19 @@ export async function listMyEvents(): Promise<EmpEvent[]> {
   const { data, error } = await supabase
     .from('events').select('*').order('created_at', { ascending: false })
   throwIf(error)
-  return (data ?? []) as EmpEvent[]
+  return (data ?? []).map(toEvent)
 }
 
 export async function getEvent(id: string): Promise<EmpEvent | null> {
   const { data, error } = await supabase.from('events').select('*').eq('id', id).maybeSingle()
   throwIf(error)
-  return data as EmpEvent | null
+  return data ? toEvent(data) : null
 }
 
 export async function getEventBySlug(slug: string): Promise<EmpEvent | null> {
   const { data, error } = await supabase.from('events').select('*').eq('slug', slug).maybeSingle()
   throwIf(error)
-  return data as EmpEvent | null
+  return data ? toEvent(data) : null
 }
 
 export function slugify(name: string): string {
@@ -41,14 +52,95 @@ export async function createEvent(fields: Partial<EmpEvent> & { name: string }):
     .insert({ slug: slugify(fields.name), ...fields })
     .select().single()
   throwIf(error)
-  return data as EmpEvent
+  return toEvent(data as Record<string, unknown>)
 }
 
 export async function updateEvent(id: string, fields: Partial<EmpEvent>): Promise<EmpEvent> {
   const { data, error } = await supabase
     .from('events').update(fields).eq('id', id).select().single()
   throwIf(error)
-  return data as EmpEvent
+  return toEvent(data as Record<string, unknown>)
+}
+
+// ---- clubs -----------------------------------------------------------------
+
+export async function listClubs(): Promise<Club[]> {
+  const { data, error } = await supabase.from('clubs').select('*').order('name')
+  throwIf(error)
+  return (data ?? []) as Club[]
+}
+
+export async function getClub(id: string): Promise<Club | null> {
+  const { data, error } = await supabase.from('clubs').select('*').eq('id', id).maybeSingle()
+  throwIf(error)
+  return data as Club | null
+}
+
+export async function getClubBySlug(slug: string): Promise<Club | null> {
+  const { data, error } = await supabase.from('clubs').select('*').eq('slug', slug).maybeSingle()
+  throwIf(error)
+  return data as Club | null
+}
+
+export async function listMyClubMemberships(userId: string): Promise<ClubMember[]> {
+  const { data, error } = await supabase
+    .from('club_members').select('*').eq('user_id', userId)
+  throwIf(error)
+  return (data ?? []) as ClubMember[]
+}
+
+export async function listClubMembers(clubId: string): Promise<(ClubMember & { profile: Profile })[]> {
+  const { data, error } = await supabase
+    .from('club_members')
+    .select('*, profile:profiles(*)')
+    .eq('club_id', clubId)
+    .order('created_at')
+  throwIf(error)
+  return (data ?? []) as (ClubMember & { profile: Profile })[]
+}
+
+export async function createClub(fields: Partial<Club> & { name: string }): Promise<Club> {
+  const { data, error } = await supabase
+    .from('clubs')
+    .insert({ slug: slugify(fields.name), ...fields })
+    .select().single()
+  throwIf(error)
+  return data as Club
+}
+
+export async function updateClub(id: string, fields: Partial<Club>): Promise<Club> {
+  const { data, error } = await supabase
+    .from('clubs').update(fields).eq('id', id).select().single()
+  throwIf(error)
+  return data as Club
+}
+
+export async function addClubMemberByEmail(clubId: string, email: string, role: ClubRole): Promise<void> {
+  const { data: profile, error: pErr } = await supabase
+    .from('profiles').select('id').eq('email', email.trim().toLowerCase()).maybeSingle()
+  throwIf(pErr)
+  if (!profile) throw new Error(`No account found for ${email}. They must sign up first.`)
+  const { error } = await supabase
+    .from('club_members').insert({ club_id: clubId, user_id: profile.id, role })
+  throwIf(error)
+}
+
+export async function updateClubMemberRole(memberId: string, role: ClubRole): Promise<void> {
+  const { error } = await supabase.from('club_members').update({ role }).eq('id', memberId)
+  throwIf(error)
+}
+
+export async function removeClubMember(memberId: string): Promise<void> {
+  const { error } = await supabase.from('club_members').delete().eq('id', memberId)
+  throwIf(error)
+}
+
+export async function listClubEvents(clubId: string): Promise<EmpEvent[]> {
+  const { data, error } = await supabase
+    .from('events').select('*').eq('club_id', clubId)
+    .order('created_at', { ascending: false })
+  throwIf(error)
+  return (data ?? []).map(toEvent)
 }
 
 // ---- membership / roles ----------------------------------------------------
