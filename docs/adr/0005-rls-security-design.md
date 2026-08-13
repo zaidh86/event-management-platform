@@ -1,6 +1,16 @@
 # ADR-0005: RLS and security design for the platform model
 
 **Status:** Accepted (design) · 2026-08-13 · Policies are written and reviewed in Phase 1, not now.
+· Amended 2026-08-14 (table grants, migration 00009)
+
+> **Amendment (00009):** the Phase 1 RLS matrix caught that 00004 created `clubs`/`club_members`
+> with RLS policies but **no table grants**. This project's Supabase instance has no baseline
+> default privileges on the public schema — 00003 established the convention of explicit,
+> least-privilege, per-table grants mirroring the RLS policy surface, and every new table must ship
+> grants alongside its policies or PostgREST denies access at the grant gate before RLS runs
+> (SQLSTATE 42501). `00009_phase1_table_grants.sql` corrects the two tables (authenticated:
+> policy-mirroring grants, no clubs DELETE; anon: none; service_role: full CRUD). **Standing rule
+> for all Phase 3 module tables: grants + policies land together in the same migration.**
 
 ## Context
 

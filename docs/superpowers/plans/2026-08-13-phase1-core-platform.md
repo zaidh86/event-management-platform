@@ -24,10 +24,10 @@ running unchanged; club-aware UI arrives in Phase 2.
 - Every migration ships with its rollback note (included per task) and is applied **one wave at a
   time** via Supabase SQL editor or `supabase db push`, with its verification queries run before
   the next wave.
-- Migrations are numbered `00004…00007`, plus corrective `00008_fix_owner_grant_context.sql`
-  (see Task 4 amendment). The deferred club_id NOT NULL wave is now `00009`, deliberately
-  **excluded** from this plan and needing separate approval after a verification window
-  (ADR-0004 wave 6).
+- Migrations are numbered `00004…00007`, plus correctives `00008_fix_owner_grant_context.sql`
+  (see Task 4 amendment) and `00009_phase1_table_grants.sql` (see Task 1 amendment). The deferred
+  club_id NOT NULL wave is now `00010`, deliberately **excluded** from this plan and needing
+  separate approval after a verification window (ADR-0004 wave 6).
 - Gate at plan end: `npm run build` + `npm run lint` clean; browser regression (login, event flows,
   realtime leaderboard); RLS matrix green; security review of the full SQL diff.
 - The project has no JS test runner; TS tasks verify via build + lint + browser checks. SQL tasks
@@ -36,6 +36,12 @@ running unchanged; club-aware UI arrives in Phase 2.
 ---
 
 ### Task 1: Migration 00004 — clubs, club_members, helpers, RLS, seed
+
+> **⚠ Amendment (post-execution):** the 00004 SQL below creates the tables and policies but omits
+> **table grants**, which this project requires explicitly (no baseline default privileges — see
+> 00003 and the ADR-0005 amendment). The RLS matrix caught the omission (42501 before RLS).
+> Corrected by `supabase/migrations/00009_phase1_table_grants.sql`. When adding future tables,
+> ship grants + policies together — do not copy this version without them.
 
 **Files:**
 - Create: `supabase/migrations/00004_clubs.sql`

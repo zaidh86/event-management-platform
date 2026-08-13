@@ -13,7 +13,8 @@
 > while app clients and service-role requests can never grant ownership. Owner demotion/deletion
 > remains blocked in **every** context including the SQL editor; deliberate ownership transfer
 > requires the break-glass procedure in `docs/runbooks/assign-platform-owner.md`. The deferred
-> `club_id NOT NULL` wave renumbers from 00008 to **00009**.
+> `club_id NOT NULL` wave, twice displaced by corrective migrations, is now **00010**
+> (00008 = this owner-grant fix; 00009 = Phase 1 table grants, see ADR-0005 amendment).
 
 ## Context
 
