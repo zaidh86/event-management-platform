@@ -1,6 +1,7 @@
 // Domain types mirroring the database rows (supabase/migrations/00001_init.sql).
 
-export type GlobalRole = 'user' | 'super_admin'
+export type GlobalRole = 'user' | 'super_admin' | 'platform_owner'
+export type ClubRole = 'club_admin' | 'member'
 export type EventRole = 'organizer' | 'activity_admin' | 'volunteer' | 'participant'
 export type EventStatus = 'draft' | 'active' | 'ended' | 'archived'
 export type ActivityKind = 'configured' | 'integrated'
@@ -23,10 +24,47 @@ export interface RegistrationField {
   options?: string[]
 }
 
+export interface Club {
+  id: string
+  slug: string
+  name: string
+  description: string
+  logo_url: string | null
+  banner_url: string | null
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ClubMember {
+  id: string
+  club_id: string
+  user_id: string
+  role: ClubRole
+  created_at: string
+}
+
+// Capability flags gating event features (ADR-0003). Absent keys mean false;
+// rows from before migration 00006 normalize to the legacy game-set.
+export interface EventCapabilities {
+  teams: boolean
+  points: boolean
+  qr: boolean
+  attendance: boolean
+  submissions: boolean
+  judging: boolean
+  deadlines: boolean
+  feedback: boolean
+  certificates: boolean
+  games_api: boolean
+}
+
 export interface EmpEvent {
   id: string
   name: string
   slug: string
+  club_id: string | null
+  capabilities: EventCapabilities
   description: string
   status: EventStatus
   is_team_event: boolean
