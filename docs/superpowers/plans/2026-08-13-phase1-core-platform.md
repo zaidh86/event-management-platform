@@ -24,8 +24,10 @@ running unchanged; club-aware UI arrives in Phase 2.
 - Every migration ships with its rollback note (included per task) and is applied **one wave at a
   time** via Supabase SQL editor or `supabase db push`, with its verification queries run before
   the next wave.
-- Migrations are numbered `00004…00007`; `00008` (club_id NOT NULL) is deliberately **excluded**
-  from this plan and needs separate approval after a verification window (ADR-0004 wave 6).
+- Migrations are numbered `00004…00007`, plus corrective `00008_fix_owner_grant_context.sql`
+  (see Task 4 amendment). The deferred club_id NOT NULL wave is now `00009`, deliberately
+  **excluded** from this plan and needing separate approval after a verification window
+  (ADR-0004 wave 6).
 - Gate at plan end: `npm run build` + `npm run lint` clean; browser regression (login, event flows,
   realtime leaderboard); RLS matrix green; security review of the full SQL diff.
 - The project has no JS test runner; TS tasks verify via build + lint + browser checks. SQL tasks
@@ -247,6 +249,12 @@ from events limit 5;   -- points=true everywhere; teams matches is_team_event
 ---
 
 ### Task 4: Migration 00007 — Platform Owner role + protection; runbook
+
+> **⚠ Amendment (post-execution):** the `protect_profile_role()` body embedded below shipped with a
+> guard-ordering bug — its final guard rejects the documented SQL-editor owner grant
+> (`is_super_admin()` is always false when `auth.uid()` is null), and it references `NEW` on
+> DELETE paths. Do **not** copy this version. The corrected function is
+> `supabase/migrations/00008_fix_owner_grant_context.sql`; behavior spec in ADR-0002's amendment.
 
 **Files:**
 - Create: `supabase/migrations/00007_platform_owner.sql`

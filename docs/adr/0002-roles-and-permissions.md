@@ -1,6 +1,19 @@
 # ADR-0002: Role hierarchy, Platform Owner protection, permission matrix
 
-**Status:** Accepted · 2026-08-13
+**Status:** Accepted · 2026-08-13 · Amended 2026-08-13 (owner-grant context fix, migration 00008)
+
+> **Amendment (00008):** as shipped in 00007, `protect_profile_role()` could never actually
+> perform the documented SQL-editor bootstrap: its final guard (inherited from 00001) rejected any
+> role change when `is_super_admin()` was false — and `is_super_admin()` is always false when
+> `auth.uid()` is null, which is precisely the SQL-editor context. 00007 also referenced `NEW` on
+> code paths reachable during DELETE, where `NEW` does not exist. `00008_fix_owner_grant_context.sql`
+> replaces the function body only. The **administrative SQL context** is now defined as:
+> `auth.uid() is null AND auth.role() not in ('service_role','anon')` — so the SQL editor/psql/
+> migrations can grant the initial owner (and change other global roles, a deliberate consequence),
+> while app clients and service-role requests can never grant ownership. Owner demotion/deletion
+> remains blocked in **every** context including the SQL editor; deliberate ownership transfer
+> requires the break-glass procedure in `docs/runbooks/assign-platform-owner.md`. The deferred
+> `club_id NOT NULL` wave renumbers from 00008 to **00009**.
 
 ## Context
 
