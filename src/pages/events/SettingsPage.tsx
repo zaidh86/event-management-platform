@@ -1,10 +1,11 @@
 import { useState, type FormEvent } from 'react'
-import { updateEvent, uploadEventMedia } from '../../lib/api'
+import { useNavigate } from 'react-router-dom'
+import { deleteEvent, updateEvent, uploadEventMedia } from '../../lib/api'
 import { useEvent } from './EventLayout'
-import type { EventStatus, RegistrationField } from '../../lib/types'
+import type { EmpEvent, EventStatus, RegistrationField } from '../../lib/types'
 
 export function SettingsPage() {
-  const { event, refresh } = useEvent()
+  const { event, refresh, canManageEvent, isClubAdmin } = useEvent()
   const [form, setForm] = useState({
     name: event.name,
     description: event.description,
@@ -63,6 +64,17 @@ export function SettingsPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed')
     }
+  }
+
+  // the tab is hidden for the unauthorized; this also covers arriving by URL.
+  // Configure rights: event organizers, club admins of the event's club, and
+  // platform admins — mirroring the events_update RLS policy.
+  if (!canManageEvent) {
+    return (
+      <div className="page">
+        <p className="form-error">You don't have permission to configure this event.</p>
+      </div>
+    )
   }
 
   return (
@@ -244,6 +256,64 @@ export function SettingsPage() {
         {notice && <p className="form-notice">{notice}</p>}
         <button className="btn btn-primary" disabled={busy}>{busy ? 'Saving…' : 'Save settings'}</button>
       </form>
+
+      {/* Outside the settings form on purpose: nesting forms is invalid markup and
+          would let a stray Enter key submit the wrong one. Deletion is club-management
+          authority: platform admins, or club admins of this event's club — mirroring
+          the events_delete RLS policy. Plain organizers configure but never delete. */}
+      {isClubAdmin && <DangerZone event={event} />}
     </div>
+  )
+}
+
+function DangerZone({ event }: { event: EmpEvent }) {
+  const navigate = useNavigate()
+  const [confirmName, setConfirmName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const confirmed = confirmName.trim() === event.name.trim()
+
+  async function onDelete() {
+    if (!confirmed || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      await deleteEvent(event.id)
+      navigate(event.club_id ? `/clubs/${event.club_id}/events` : '/', { replace: true })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete event')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="card danger-zone stack">
+      <h3>Danger zone</h3>
+      <p className="muted">
+        Deleting <strong>{event.name}</strong> is permanent and cannot be undone.
+        Its participants, teams, activities, announcements and the entire points
+        ledger — every account balance and transaction — are deleted with it.
+      </p>
+      <label>
+        Type <strong>{event.name}</strong> to confirm
+        <input
+          value={confirmName}
+          onChange={(e) => setConfirmName(e.target.value)}
+          placeholder={event.name}
+          autoComplete="off"
+          disabled={busy}
+        />
+      </label>
+      {error && <p className="form-error">{error}</p>}
+      <button
+        type="button"
+        className="btn btn-danger"
+        disabled={!confirmed || busy}
+        onClick={() => void onDelete()}
+      >
+        {busy ? 'Deleting…' : 'Delete event permanently'}
+      </button>
+    </section>
   )
 }

@@ -13,8 +13,19 @@
 > while app clients and service-role requests can never grant ownership. Owner demotion/deletion
 > remains blocked in **every** context including the SQL editor; deliberate ownership transfer
 > requires the break-glass procedure in `docs/runbooks/assign-platform-owner.md`. The deferred
-> `club_id NOT NULL` wave, twice displaced by corrective migrations, is now **00010**
-> (00008 = this owner-grant fix; 00009 = Phase 1 table grants, see ADR-0005 amendment).
+> `club_id NOT NULL` wave, displaced four times, is now **00012** (00008 = this owner-grant fix;
+> 00009 = Phase 1 table grants, see ADR-0005 amendment; 00010 = club deletion, see ADR-0001
+> amendment; 00011 = General-club retirement + club-admin event authority, below). Club and event
+> deletion authority is recorded in the matrix below.
+
+> **Amendment (00011, 2026-08-15): Club Admin is the manager of their club's events.** The
+> organizer-only event policies made that false in practice — a club admin could not see, edit or
+> delete a draft created by a fellow admin of the same club. `events_select_auth`, `events_update`
+> and `events_delete` gain an `is_club_admin(club_id)` arm (club-scoped for club admins; platform
+> admins unchanged; false on null `club_id` for everyone else, so legacy orphans gain no readers).
+> Organizers keep configure rights but deliberately hold **no delete arm** — destroying an event and
+> its ledger is club-management authority. Cross-club movement remains guarded by
+> `protect_event_club()`: admin standing over both source and destination clubs.
 
 ## Context
 
@@ -63,9 +74,11 @@ Admin of the Literary Club has no authority in the CS Club.
 |---|---|---|---|---|---|---|---|
 | Create/remove super admins | ● | ● create only | — | — | — | — | — |
 | Remove/demote Owner | blocked by trigger for everyone | — | — | — | — | — | — |
-| Manage any club/event | ● | ● | own club | assigned event | — | — | — |
+| Manage any club/event | ● | ● | own club | assigned event | — | — |
+| Delete a club (must own zero events) | ● | ● | — | — | — | — |
+| Delete an event | ● | ● | ● own club | — | — | — | — |
 | Create club events, assign managers | ● | ● | ● | — | — | — | — |
-| Configure event, manage participants | ● | ● | — | ● | — | — | — |
+| Configure event, manage participants | ● | ● | ● configure, own club | ● | — | — | — |
 | Projector mode (403 otherwise) | ● | ● | — | ● | — | — | — |
 | Event ops: QR, check-in, stations | ● | ● | — | ● | ● | ● | — |
 | Register / participate / own results | ● | ● | ● | ● | ● | ● | ● |

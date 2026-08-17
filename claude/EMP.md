@@ -2,7 +2,27 @@
 
 **WHAT we are building.** (See [BES.md](./BES.md) for HOW.)
 
-## Vision
+## Current architecture (2026-08 club-first pivot)
+
+EMP is an Event Management Platform where clubs and organizations create and manage their clubs,
+configure their club environment, and run configurable events within them. Gamification is an
+event **capability**, not the product's definition.
+
+```
+Platform (Platform Owner → Super Admins)
+  └── Clubs (club_admin / member via club_members)
+        └── Events (belong to exactly one club)
+              ├── General configuration  — name, registration, format, branding, activities
+              └── Capabilities           — points/leaderboard, QR, teams, games API, …
+                                           (events.capabilities jsonb, ADR-0003)
+```
+
+Authoritative docs: `docs/PRODUCT.md` + `docs/adr/0001…0006`. Roles: `platform_owner` /
+`super_admin` / `user` globally; `club_admin` / `member` per club; existing event roles unchanged.
+Platform admins hold club-admin authority everywhere without membership rows (`is_super_admin()`
+inheritance).
+
+## Original vision (historical — superseded by the club-first architecture above)
 
 A generic, reusable platform for running club events with points, activities,
 QR-based interactions, and live leaderboards. **Cyber Casino is only the first

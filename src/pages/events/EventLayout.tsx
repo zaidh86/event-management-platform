@@ -1,14 +1,20 @@
-import { useCallback, useEffect, useState } from 'react'
-import { NavLink, Outlet, useOutletContext, useParams } from 'react-router-dom'
-import { getEvent, getMyMembership, getMyParticipant } from '../../lib/api'
+import { Suspense, useCallback, useEffect, useState } from 'react'
+import { Link, NavLink, Outlet, useOutletContext, useParams } from 'react-router-dom'
+import { getClub, getEvent, getMyMembership, getMyParticipant, listMyClubMemberships } from '../../lib/api'
 import { useAuth } from '../../contexts/AuthContext'
-import type { EmpEvent, EventRole, Participant } from '../../lib/types'
+import { clubRoleLabel, eventRoleLabel, platformRoleLabel } from '../../lib/roles'
+import type { Club, ClubRole, EmpEvent, EventRole, Participant } from '../../lib/types'
 
 export interface EventContext {
   event: EmpEvent
   role: EventRole | null
   isOrganizer: boolean
   isStaff: boolean
+  // club-admin standing over the event's club, platform admins included —
+  // mirrors is_club_admin(event.club_id) in SQL; this is who may delete
+  isClubAdmin: boolean
+  // who may configure the event: its organizers, or club admins of its club
+  canManageEvent: boolean
   participant: Participant | null
   refresh: () => Promise<void>
 }
@@ -20,9 +26,11 @@ export function useEvent(): EventContext {
 
 export function EventLayout() {
   const { eventId } = useParams<{ eventId: string }>()
-  const { session, isSuperAdmin } = useAuth()
+  const { session, isSuperAdmin, profile } = useAuth()
   const [event, setEvent] = useState<EmpEvent | null>(null)
+  const [club, setClub] = useState<Club | null>(null)
   const [role, setRole] = useState<EventRole | null>(null)
+  const [myClubRole, setMyClubRole] = useState<ClubRole | null>(null)
   const [participant, setParticipant] = useState<Participant | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
@@ -30,10 +38,11 @@ export function EventLayout() {
   const refresh = useCallback(async () => {
     if (!eventId || !session) return
     try {
-      const [ev, membership, part] = await Promise.all([
+      const [ev, membership, part, clubMemberships] = await Promise.all([
         getEvent(eventId),
         getMyMembership(eventId, session.user.id),
         getMyParticipant(eventId, session.user.id),
+        listMyClubMemberships(session.user.id),
       ])
       if (!ev) {
         setError('Event not found (or you do not have access).')
@@ -42,7 +51,16 @@ export function EventLayout() {
       setEvent(ev)
       setRole(membership?.role ?? null)
       setParticipant(part)
+      setMyClubRole(
+        ev.club_id
+          ? clubMemberships.find((m) => m.club_id === ev.club_id)?.role ?? null
+          : null,
+      )
       setError(null)
+      // owning club, for the breadcrumb (non-fatal if unreadable)
+      if (ev.club_id) {
+        getClub(ev.club_id).then(setClub).catch(() => setClub(null))
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load event')
     } finally {
@@ -59,29 +77,49 @@ export function EventLayout() {
 
   const isOrganizer = role === 'organizer' || isSuperAdmin
   const isStaff = isOrganizer || role === 'activity_admin' || role === 'volunteer'
+  const isClubAdmin = isSuperAdmin || myClubRole === 'club_admin'
+  const canManageEvent = isOrganizer || isClubAdmin
+  const caps = event.capabilities
 
-  const ctx: EventContext = { event, role, isOrganizer, isStaff, participant, refresh }
+  const ctx: EventContext = {
+    event, role, isOrganizer, isStaff, isClubAdmin, canManageEvent, participant, refresh,
+  }
 
   return (
     <div className="event-shell" style={{ ['--theme' as string]: event.theme_color }}>
+      {event.club_id && (
+        <p className="breadcrumb">
+          <Link to={`/clubs/${event.club_id}`}>← {club?.name ?? 'Club'}</Link>
+        </p>
+      )}
       <div className="event-header">
         {event.logo_url && <img src={event.logo_url} alt="" className="event-logo" />}
         <div>
           <h1>{event.name}</h1>
           <span className={`badge badge-${event.status}`}>{event.status}</span>
-          {role && <span className="badge">{role.replace('_', ' ')}</span>}
+          {eventRoleLabel(role) && <span className="badge">{eventRoleLabel(role)}</span>}
+          {isSuperAdmin && !role && (
+            <span className="badge badge-admin">{platformRoleLabel(profile?.role)}</span>
+          )}
+          {!isSuperAdmin && !role && clubRoleLabel(myClubRole) && (
+            <span className="badge">{clubRoleLabel(myClubRole)}</span>
+          )}
         </div>
       </div>
       <nav className="event-tabs">
         <NavLink to="" end>Overview</NavLink>
-        <NavLink to="leaderboard">Leaderboard</NavLink>
-        {(role === 'participant' || !role) && <NavLink to="dashboard">My dashboard</NavLink>}
-        {isStaff && <NavLink to="scan">Scan</NavLink>}
+        {caps.points && <NavLink to="leaderboard">Leaderboard</NavLink>}
+        {/* registered people always get their dashboard; everyone else sees it only
+            if they could still register (staff aren't shown a registration form) */}
+        {(participant || !isStaff) && <NavLink to="dashboard">My dashboard</NavLink>}
+        {isStaff && caps.qr && <NavLink to="scan">Scan</NavLink>}
         {isStaff && <NavLink to="activities">Activities</NavLink>}
         {isOrganizer && <NavLink to="members">Members</NavLink>}
-        {isOrganizer && <NavLink to="settings">Settings</NavLink>}
+        {canManageEvent && <NavLink to="settings">Settings</NavLink>}
       </nav>
-      <Outlet context={ctx} />
+      <Suspense fallback={<div className="page-loading">Loading…</div>}>
+        <Outlet context={ctx} />
+      </Suspense>
     </div>
   )
 }

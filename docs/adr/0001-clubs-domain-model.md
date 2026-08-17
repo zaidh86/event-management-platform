@@ -1,7 +1,27 @@
 # ADR-0001: Clubs domain model
 
-**Status:** Accepted · 2026-08-13
+**Status:** Accepted · 2026-08-13 · Amended 2026-08-14 (club deletion, migration 00010)
 **Deciders:** Platform owner (user) + roadmap approval
+
+> **Amendment (00010):** the "no club deletion in v1" decision below is superseded. Club deletion is
+> now supported as a **platform-level** action: `00010_club_deletion.sql` adds the DELETE grant for
+> `authenticated` plus policy `clubs_delete ... using (is_super_admin())`, so platform owner and
+> super admins may delete a club; **club admins may not delete a club, including their own**, and
+> neither may members or anon. The cascade caution that motivated the original decision is preserved
+> rather than solved: `events.club_id` keeps its NO ACTION behavior, so deleting a club that still
+> owns events fails with SQLSTATE 23503 and rolls back — **no event data is ever cascade-deleted**.
+> Only an empty club can be deleted, and only its `club_members` rows follow it. No slug is exempt.
+
+> **Amendment 2 (2026-08-14, proposed 00011): the General fallback club is retired.** The decision
+> below that "clubs are mandatory … a system-created *General* club absorbs all pre-existing and
+> club-less events" is superseded: **every event now belongs to a real club, and there is no
+> fallback**. `default_event_club()` and the `club_id is null` / General arms of `events_insert`
+> (00005) are removed, and the General row is deleted once it owns nothing. This closes a silent
+> failure mode rather than opening one: `default_event_club()` resolves the club by slug with a
+> non-STRICT `SELECT INTO`, so deleting the row *without* removing the machinery would stamp
+> `club_id = NULL` on every later event with no error. Consequence to note: event creation now
+> requires club-admin standing in a real club, so club admins must be appointed by a platform
+> administrator — there is no self-serve path.
 
 ## Context
 

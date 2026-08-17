@@ -50,18 +50,22 @@ export function OverviewPage() {
           <dl className="info-list">
             <dt>Format</dt>
             <dd>{event.is_team_event ? `Teams of ${event.team_size_min}–${event.team_size_max}` : 'Individual'}</dd>
-            <dt>Currency</dt>
-            <dd className="currency-cell">
-              <img
-                src={event.currency_image_url ?? '/currency-default.svg'}
-                alt="" className="currency-img"
-              />
-              {event.currency_name} / {event.currency_name_plural}
-            </dd>
-            <dt>Starting balance</dt>
-            <dd>{event.starting_balance.toLocaleString()}</dd>
-            <dt>Leaderboard</dt>
-            <dd>{event.public_leaderboard ? 'Public' : 'Members only'}</dd>
+            {event.capabilities.points && (
+              <>
+                <dt>Currency</dt>
+                <dd className="currency-cell">
+                  <img
+                    src={event.currency_image_url ?? '/currency-default.svg'}
+                    alt="" className="currency-img"
+                  />
+                  {event.currency_name} / {event.currency_name_plural}
+                </dd>
+                <dt>Starting balance</dt>
+                <dd>{event.starting_balance.toLocaleString()}</dd>
+                <dt>Leaderboard</dt>
+                <dd>{event.public_leaderboard ? 'Public' : 'Members only'}</dd>
+              </>
+            )}
           </dl>
         </section>
         <section className="card">

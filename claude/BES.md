@@ -21,10 +21,10 @@ src/
   lib/                  supabase client, types, helpers (pure, no React)
   contexts/             AuthContext (session + profile + event roles)
   components/           shared UI (guards, layout, QR, etc.)
-  pages/                route components, grouped by audience
-    auth/  events/  organizer/  participant/  volunteer/  public/
-docs/                   integration guide for club members (committed)
-claude/                 working docs (EMP.md, BES.md) — gitignored
+  pages/                route components, grouped by area
+    auth/  clubs/  events/  public/
+docs/                   product definition, ADRs, runbooks, integration guide (committed)
+claude/                 working docs (EMP.md, BES.md) — committed (not gitignored)
 ```
 
 ## Non-negotiable rules

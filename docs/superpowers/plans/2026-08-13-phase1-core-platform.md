@@ -25,8 +25,9 @@ running unchanged; club-aware UI arrives in Phase 2.
   time** via Supabase SQL editor or `supabase db push`, with its verification queries run before
   the next wave.
 - Migrations are numbered `00004…00007`, plus correctives `00008_fix_owner_grant_context.sql`
-  (see Task 4 amendment) and `00009_phase1_table_grants.sql` (see Task 1 amendment). The deferred
-  club_id NOT NULL wave is now `00010`, deliberately **excluded** from this plan and needing
+  (see Task 4 amendment) and `00009_phase1_table_grants.sql` (see Task 1 amendment), plus the
+  post-phase feature migration `00010_club_deletion.sql` (ADR-0001 amendment). The deferred
+  club_id NOT NULL wave is now `00011`, deliberately **excluded** from this plan and needing
   separate approval after a verification window (ADR-0004 wave 6).
 - Gate at plan end: `npm run build` + `npm run lint` clean; browser regression (login, event flows,
   realtime leaderboard); RLS matrix green; security review of the full SQL diff.

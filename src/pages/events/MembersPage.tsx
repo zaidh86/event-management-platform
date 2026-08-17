@@ -9,7 +9,7 @@ import type { EventMember, EventRole, Participant, Profile } from '../../lib/typ
 const ROLES: EventRole[] = ['organizer', 'activity_admin', 'volunteer', 'participant']
 
 export function MembersPage() {
-  const { event } = useEvent()
+  const { event, isOrganizer } = useEvent()
   const { session } = useAuth()
   const [members, setMembers] = useState<(EventMember & { profile: Profile })[]>([])
   const [participants, setParticipants] = useState<Participant[]>([])
@@ -36,6 +36,15 @@ export function MembersPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add member')
     }
+  }
+
+  // the tab is hidden for non-organizers; this also covers arriving by URL
+  if (!isOrganizer) {
+    return (
+      <div className="page">
+        <p className="form-error">You don't have permission to manage this event's members.</p>
+      </div>
+    )
   }
 
   return (

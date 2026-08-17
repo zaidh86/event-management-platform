@@ -152,17 +152,19 @@ function ParticipantDashboard({ participant, refreshEvent, eventId }: {
   return (
     <div className="page">
       <div className="dash-grid">
-        <section className="card balance-card">
-          <h2>{event.is_team_event ? 'Team balance' : 'My balance'}</h2>
-          {account ? (
-            <div className="balance-big">
-              <img src={event.currency_image_url ?? '/currency-default.svg'} alt="" className="currency-img-lg" />
-              <span>{fmtPoints(event, account.balance)}</span>
-            </div>
-          ) : (
-            <p className="muted">{needsTeam ? 'Join a team to get a balance.' : 'No account yet.'}</p>
-          )}
-        </section>
+        {event.capabilities.points && (
+          <section className="card balance-card">
+            <h2>{event.is_team_event ? 'Team balance' : 'My balance'}</h2>
+            {account ? (
+              <div className="balance-big">
+                <img src={event.currency_image_url ?? '/currency-default.svg'} alt="" className="currency-img-lg" />
+                <span>{fmtPoints(event, account.balance)}</span>
+              </div>
+            ) : (
+              <p className="muted">{needsTeam ? 'Join a team to get a balance.' : 'No account yet.'}</p>
+            )}
+          </section>
+        )}
 
         {event.is_team_event ? (
           needsTeam
@@ -175,18 +177,20 @@ function ParticipantDashboard({ participant, refreshEvent, eventId }: {
                     <li key={m.id}>{m.display_name}{m.id === participant.id && ' (you)'}</li>
                   ))}
                 </ul>
-                {team && <QRCard token={team.qr_token} label={`Team QR — ${team.name}`} />}
+                {team && event.capabilities.qr && <QRCard token={team.qr_token} label={`Team QR — ${team.name}`} />}
               </section>
             )
         ) : (
-          <section className="card">
-            <h2>My QR code</h2>
-            <p className="muted">Show this at activity stations.</p>
-            <QRCard token={participant.qr_token} label={participant.display_name} />
-          </section>
+          event.capabilities.qr && (
+            <section className="card">
+              <h2>My QR code</h2>
+              <p className="muted">Show this at activity stations.</p>
+              <QRCard token={participant.qr_token} label={participant.display_name} />
+            </section>
+          )
         )}
 
-        {event.is_team_event && !needsTeam && (
+        {event.is_team_event && !needsTeam && event.capabilities.qr && (
           <section className="card">
             <h2>My QR code</h2>
             <p className="muted">Scans of your personal QR credit your team.</p>
@@ -194,19 +198,21 @@ function ParticipantDashboard({ participant, refreshEvent, eventId }: {
           </section>
         )}
 
-        <section className="card tx-card">
-          <h2>Transactions</h2>
-          {transactions.length === 0 && <p className="muted">No transactions yet.</p>}
-          <ul className="tx-list">
-            {transactions.map((tx) => (
-              <li key={tx.id}>
-                <span className={`tx-amount ${tx.amount >= 0 ? 'pos' : 'neg'}`}>{fmtSigned(event, tx.amount)}</span>
-                <span className="tx-desc">{tx.description || tx.type.replace('_', ' ')}</span>
-                <span className="muted">{fmtDateTime(tx.created_at)}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
+        {event.capabilities.points && (
+          <section className="card tx-card">
+            <h2>Transactions</h2>
+            {transactions.length === 0 && <p className="muted">No transactions yet.</p>}
+            <ul className="tx-list">
+              {transactions.map((tx) => (
+                <li key={tx.id}>
+                  <span className={`tx-amount ${tx.amount >= 0 ? 'pos' : 'neg'}`}>{fmtSigned(event, tx.amount)}</span>
+                  <span className="tx-desc">{tx.description || tx.type.replace('_', ' ')}</span>
+                  <span className="muted">{fmtDateTime(tx.created_at)}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
       </div>
     </div>
   )

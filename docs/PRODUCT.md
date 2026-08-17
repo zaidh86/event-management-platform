@@ -5,10 +5,14 @@
 
 ## Vision
 
-EMP is a **college event operating system**. Instead of every club building a one-off site per event,
-any club in a college runs its events on EMP: registration, teams, operations (QR, check-in,
-stations), live scoring, submissions and judging, results, feedback, certificates, and analytics —
-with each event enabling only the capabilities it needs.
+EMP is an **Event Management Platform where clubs and organizations create and manage their clubs,
+configure their club environment, and run configurable events within them.** Instead of every club
+building a one-off site per event, any club in a college runs its events on EMP: registration,
+teams, operations (QR, check-in, stations), live scoring, submissions and judging, results,
+feedback, certificates, and analytics. Clubs are the organizational container; every event belongs
+to a club, shares a general configuration layer that applies regardless of event type, and enables
+only the event-specific capabilities it needs (gamification is one such capability, not the
+product's definition).
 
 ## Hierarchy
 

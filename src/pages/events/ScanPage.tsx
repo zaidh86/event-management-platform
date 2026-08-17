@@ -12,7 +12,7 @@ import type { Activity, QrResolution } from '../../lib/types'
 // Volunteer / activity admin station: scan a QR (or type the token),
 // see who it is, then award or deduct points — optionally tied to an activity.
 export function ScanPage() {
-  const { event } = useEvent()
+  const { event, isStaff } = useEvent()
   const [scanning, setScanning] = useState(true)
   const [manual, setManual] = useState('')
   const [target, setTarget] = useState<QrResolution | null>(null)
@@ -38,6 +38,15 @@ export function ScanPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not resolve QR code')
     }
+  }
+
+  // the tab is hidden for non-staff; this also covers arriving by URL
+  if (!isStaff) {
+    return (
+      <div className="page">
+        <p className="form-error">Only event staff can run a scan station.</p>
+      </div>
+    )
   }
 
   return (

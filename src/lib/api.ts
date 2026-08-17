@@ -62,6 +62,18 @@ export async function updateEvent(id: string, fields: Partial<EmpEvent>): Promis
   return toEvent(data as Record<string, unknown>)
 }
 
+// Permanent. Every row referencing the event cascades away with it
+// (participants, teams, accounts, transactions, activities, announcements).
+// An RLS-blocked delete returns success with zero rows rather than an error,
+// so the returned row is what proves the delete actually happened.
+export async function deleteEvent(id: string): Promise<void> {
+  const { data, error } = await supabase.from('events').delete().eq('id', id).select('id')
+  throwIf(error)
+  if (!data || data.length === 0) {
+    throw new Error('Event was not deleted — you do not have permission to delete this event.')
+  }
+}
+
 // ---- clubs -----------------------------------------------------------------
 
 export async function listClubs(): Promise<Club[]> {
@@ -113,6 +125,26 @@ export async function updateClub(id: string, fields: Partial<Club>): Promise<Clu
     .from('clubs').update(fields).eq('id', id).select().single()
   throwIf(error)
   return data as Club
+}
+
+// Permanent, and deliberately narrow: a club can only be deleted when it owns no
+// events. events.club_id is NO ACTION, so the database rejects the delete with a
+// foreign-key violation rather than cascading into event data. As with events, an
+// RLS-blocked delete returns success with zero rows, so the returned row is what
+// proves the delete actually happened.
+export async function deleteClub(id: string): Promise<void> {
+  const { data, error } = await supabase.from('clubs').delete().eq('id', id).select('id')
+  if (error) {
+    if (error.code === '23503' || /foreign key/i.test(error.message)) {
+      throw new Error(
+        'This club cannot be deleted while it contains events. Delete the events first.',
+      )
+    }
+    throw new Error(error.message)
+  }
+  if (!data || data.length === 0) {
+    throw new Error('Club was not deleted — you do not have permission to delete this club.')
+  }
 }
 
 export async function addClubMemberByEmail(clubId: string, email: string, role: ClubRole): Promise<void> {
@@ -361,6 +393,14 @@ export async function postAnnouncement(eventId: string, title: string, body: str
 }
 
 // ---- storage ---------------------------------------------------------------
+
+export async function uploadClubMedia(clubId: string, file: File, kind: string): Promise<string> {
+  const ext = file.name.split('.').pop() || 'png'
+  const path = `clubs/${clubId}/${kind}-${Date.now()}.${ext}`
+  const { error } = await supabase.storage.from('event-media').upload(path, file, { upsert: true })
+  throwIf(error)
+  return supabase.storage.from('event-media').getPublicUrl(path).data.publicUrl
+}
 
 export async function uploadEventMedia(eventId: string, file: File, kind: string): Promise<string> {
   const ext = file.name.split('.').pop() || 'png'

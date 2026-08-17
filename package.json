@@ -1,5 +1,6 @@
 {
   "name": "event-management-platform",
+  "description": "Event management platform where clubs and organizations create and manage configurable events.",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -12,6 +13,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
     "html5-qrcode": "^2.3.8",
+    "lucide-react": "^1.31.0",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
