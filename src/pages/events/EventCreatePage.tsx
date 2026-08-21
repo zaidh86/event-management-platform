@@ -148,8 +148,8 @@ export function EventCreatePage() {
             QR operations (scan stations, check-in)
           </label>
           <p className="muted">
-            More capabilities — submissions &amp; judging, attendance, feedback,
-            certificates — arrive in later phases.
+            More capabilities — submissions, judging, attendance, feedback and
+            certificates — can be enabled after event creation, in Event settings.
           </p>
         </section>
 
