@@ -1,41 +1,48 @@
 /* EMP design tokens + component styles. No UI framework — see BES.md.
-   Theming: dark is the default (:root); [data-theme="light"] overrides tokens only.
-   index.html stamps the resolved theme before first paint; ThemeContext keeps it current.
-   Components must reference var(--…) — no literal colors outside the token blocks
-   (deliberate exceptions are commented where they occur). */
+   Theming (ADR-0013): SOLARIZED. Dark (Solarized Dark) is the default (:root);
+   [data-theme="light"] overrides tokens with Solarized Light. index.html stamps
+   the resolved theme before first paint; ThemeContext keeps it current.
+   Components must reference var(--…) — no literal colors outside the token
+   blocks (deliberate exceptions are commented where they occur).
+
+   Palette: base03 #002b36 · base02 #073642 · base01 #586e75 · base00 #657b83
+            base0 #839496 · base1 #93a1a1 · base2 #eee8d5 · base3 #fdf6e3
+            yellow #b58900 · orange #cb4b16 · red #dc322f · magenta #d33682
+            violet #6c71c4 · blue #268bd2 · cyan #2aa198 · green #859900
+   A few status tones are tints/shades of their Solarized hue where the pure
+   value fails WCAG contrast on our surfaces — each is commented. */
 
 :root {
   color-scheme: dark;
 
-  /* per-event tint — EventLayout / PublicLeaderboardPage override this inline.
-     Decorative accents only (borders, bars, card trims): never text, never fills
-     that carry text, so organizer-chosen colors can't break contrast. */
-  --theme: #0c7a50;
+  /* per-event tint — EventLayout / public pages override this inline.
+     Decorative accents only (borders, bars, card trims): never text, never
+     fills that carry text, so organizer-chosen colors can't break contrast. */
+  --theme: #268bd2;
 
-  --bg: #101512;
-  --surface: #171d19;
-  --surface-2: #1e2620;
-  --border: #2a352e;
-  --text: #e7ede9;
-  --text-muted: #9aa69f;
+  --bg: #002b36;            /* base03 */
+  --surface: #073642;       /* base02 */
+  --surface-2: #0a4452;     /* elevated/input surface: lightened base02 */
+  --border: #12505f;        /* subtle, between base02 and base01 */
+  --text: #93a1a1;          /* base1 */
+  --text-muted: #657b83;    /* base00 */
 
-  /* Emerald Command (ADR-0006): brand + interactive + live share the emerald.
-     Dark fills are bright emerald with deep-green text (no white-on-bright
-     traps); --accent-text is legible on --bg (8.5:1). Gold = achievement only. */
-  --accent: #4cc38a;
-  --accent-hover: #5fd39c;
-  --accent-text: #4cc38a;
-  --accent-contrast: #04170e;
+  /* primary interactive = Solarized blue; text ON the blue fill is base03
+     (4.7:1 — base3-on-blue is only 3.4:1). Links/focus use blue directly. */
+  --accent: #268bd2;
+  --accent-hover: #3f9bdc;
+  --accent-text: #268bd2;
+  --accent-contrast: #002b36;
 
-  --pos: #34d399;
-  --neg: #f87171;
-  --warn: #fbbf24;
-  --danger-bg: #7f1d1d;
-  --danger-bg-hover: #991b1b;
-  --danger-text: #fecaca;
-  --rank-1: #d9a33c;
-  --rank-2: #cbd5e1;
-  --rank-3: #d97706;
+  --pos: #859900;           /* green */
+  --neg: #e35f5c;           /* red tint: pure #dc322f is ~2.9:1 on base03 */
+  --warn: #b58900;          /* yellow */
+  --danger-bg: #782521;     /* deep red-leaning surface (destructive fills) */
+  --danger-bg-hover: #8f2f2a;
+  --danger-text: #f0b3ad;
+  --rank-1: #b58900;        /* yellow  = 1st */
+  --rank-2: #93a1a1;        /* base1   = 2nd */
+  --rank-3: #cb4b16;        /* orange  = 3rd */
 
   --radius-sm: 6px;
   --radius: 10px;
@@ -64,27 +71,29 @@
 [data-theme='light'] {
   color-scheme: light;
 
-  --bg: #f9fbfa;
-  --surface: #ffffff;
-  --surface-2: #eef2f0;
-  --border: #dde4e0;
-  --text: #17201b;
-  --text-muted: #5b6862;
+  /* paper-on-desk: page = base2, cards = base3 (elevation is LIGHTER),
+     inputs/chips fall back to base2 so they read against cards */
+  --bg: #eee8d5;            /* base2 */
+  --surface: #fdf6e3;       /* base3 */
+  --surface-2: #eee8d5;     /* base2 */
+  --border: #d6ccb0;        /* warm border between base2 and base1 */
+  --text: #586e75;          /* base01 */
+  --text-muted: #657b83;    /* base00 */
 
-  --accent: #0c7a50;
-  --accent-hover: #095c3c;
-  --accent-text: #0c7a50;
-  --accent-contrast: #ffffff;
+  --accent: #268bd2;
+  --accent-hover: #1e77b5;
+  --accent-text: #196c9f;   /* blue shade: pure blue is ~3.3:1 on base3 */
+  --accent-contrast: #002b36;
 
-  --pos: #0f7b53;
-  --neg: #b91c1c;
-  --warn: #b45309;
-  --danger-bg: #fee2e2;
-  --danger-bg-hover: #fecaca;
-  --danger-text: #b91c1c;
-  --rank-1: #8a6117;
-  --rank-2: #64748b;
-  --rank-3: #92400e;
+  --pos: #677c00;           /* green shade: pure #859900 is ~2.7:1 on base3 */
+  --neg: #dc322f;           /* red */
+  --warn: #cb4b16;          /* orange (yellow is ~3.2:1 on base3) */
+  --danger-bg: #f3dcd3;
+  --danger-bg-hover: #ecc9bc;
+  --danger-text: #a1231d;
+  --rank-1: #8f6c00;        /* yellow shade for text contrast on base3 */
+  --rank-2: #657b83;        /* base00 = 2nd */
+  --rank-3: #a63c10;        /* orange shade = 3rd */
 }
 
 * { box-sizing: border-box; }
@@ -505,7 +514,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   padding: var(--s3); background: #ffffff; border-radius: var(--radius);
   /* deliberate literal: QR quiet zone must stay white in both themes */
 }
-.qr-public-box .qr-token { color: #4b5563; /* deliberate literal on white box */ }
+.qr-public-box .qr-token { color: #657b83; /* deliberate literal (base00) on the white QR box */ }
 
 /* scan station result states */
 .scan-flash {

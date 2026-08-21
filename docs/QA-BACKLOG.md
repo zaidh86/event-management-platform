@@ -61,7 +61,7 @@ Verification vocabulary used below:
 - Target: Production deployment checklist (deliberate; see ADR-0010 §3).
 
 ## QA-008 — events.club_id NOT NULL
-- Phase: 1 · Area: DB · Severity: Medium · Status: FIXED (repo) — migration 00018 enforces events.club_id NOT NULL with a loud orphan guard; pending live application
+- Phase: 1 · Area: DB · Severity: Medium · Status: FIXED (live) — migration 00018 enforces events.club_id NOT NULL with a loud orphan guard; applied to production (see QA-017)
 - Expected: Every event provably belongs to a club at the schema level.
 - Actual: club_id remains nullable (deferred wave; renumbered repeatedly, now targeted at the hardening migration).
 - Target: Final QA hardening migration.
@@ -102,7 +102,7 @@ Verification vocabulary used below:
 - Target: Final QA.
 
 ## QA-015 — Anon listing shows published public forms of archived events
-- Phase: 3 · Area: Feedback · Severity: Low · Status: FIXED (repo) — migration 00018 rewrites the anon feedback-form policy to exclude archived events; pending live application
+- Phase: 3 · Area: Feedback · Severity: Low · Status: FIXED (live) — migration 00018 rewrites the anon feedback-form policy to exclude archived events; applied to production (see QA-017)
 - Actual: Submissions to archived events are blocked, but the form row itself remains anon-listable (observed in pglite v18).
 - Target: Final QA (policy tweak or accept + document).
 
@@ -114,6 +114,24 @@ Verification vocabulary used below:
 - Update (submission pass): submission PDFs now live in the private `submission-docs` bucket (00020), readable by service_role — so the deployed function can later fetch a document and pass it to the Anthropic API as a document content block. PDF **upload** is implemented; PDF **extraction** and **AI PDF analysis** are NOT implemented and remain deferred to this deployment item.
 
 ## QA-017 — Live database lags the repository
-- Phase: 4-QA · Area: DB · Severity: High (blocking new features live) · Status: OPEN (user action)
-- Actual (updated, Informatique Exhib pass): live Supabase now has 00001-00018 applied. Migration **00019** (public-first browsing, clubs.department, judge scanner role + feedback QR action, per-target feedback) is repo-only, pglite-verified (v22: 45/45), and must be applied as one script. Until then, signed-out visitors get a graceful error instead of the club/event directory, the department field doesn't persist, Judge isn't accepted by qr_configs, and per-target feedback dedupe isn't live.
-- Target: manual application before Informatique Exhib.
+- Phase: 4-QA · Area: DB · Severity: High (was blocking) · Status: **RESOLVED 2026-08-21** — production is at **00020**; no migration in this repository is unapplied.
+- History: this item tracked production trailing the repo — first 00012-00014, then 00015-00018, then 00019. All are applied.
+- Verified live (read-only catalog inspection in the Supabase SQL editor, 2026-08-21) for **00020 — submission documents**:
+  - `submission-docs` storage bucket exists, `public = false`, `file_size_limit = 10485760`, `allowed_mime_types = {application/pdf}` — so the 10 MB / PDF-only limits are enforced server-side, not just in the client.
+  - `submissions.document_path` and `submissions.document_name` exist; the `submissions_document_pair` CHECK constraint exists.
+  - All four submission-document RLS policies exist on `storage.objects`, each with correctly **qualified `objects.name`** in its `split_part(...)` expressions, and with the intended owner / Event-Manager / judge-on-submitted-entries authorization logic.
+  - `public.save_submission(uuid, text, text, jsonb, boolean, text, text)` exists, with EXECUTE granted to `authenticated` and `service_role`.
+- The 42710 error seen while re-applying 00020 changed nothing: the SQL editor runs a pasted script as one implicit transaction, and the run aborted at its first `create policy`.
+- Caveat carried forward: production received 00020 from SQL that was **not** this repository's file, so the live policy identifiers differ from the migration's — see **QA-018**. 00020 neither needs nor can be re-run against production.
+- Target: none — closed. New schema work continues at **00021**.
+
+## QA-018 — 00020 policy names diverge between repository and production
+- Phase: 4-QA · Area: DB / Storage RLS · Severity: Low (cosmetic — no functional, authorization or security impact) · Status: **DOCUMENTED / WONT-FIX for now** — renaming a live policy days before Informatique Exhib is risk without benefit.
+- Expected: policy names on `storage.objects` match the migration that created them.
+- Actual: production carries the four submission-document policies under snake_case names — `submission_docs_owner_write`, `submission_docs_owner_update`, `submission_docs_owner_delete`, `submission_docs_read` — while `supabase/migrations/00020_submission_documents.sql` (lines 58, 77, 96, 114) creates quoted, space-separated names: `"submission docs owner write"`, `"submission docs owner update"`, `"submission docs owner delete"`, `"submission docs read"`. Verified live: commands, roles, `USING` / `WITH CHECK` bodies and the `objects.name` qualification are all correct and equivalent to the migration. **Only the identifiers differ.**
+- Provenance: the live names are the repo's own literals with U+0020 replaced by U+005F — same words, same order, same casing — so the applied SQL was derived from 00020 and restyled, most plausibly by the Supabase dashboard's AI assistant or by hand in the SQL editor. The token `submission_docs` appears in **no** file in this repository, in **no** git object (all dangling blobs inspected), and in no local tool/agent transcript; the Supabase CLI was never initialised here (no `supabase/config.toml`), so `db push` is excluded. PostgreSQL's `CreatePolicy()` echoes the name in the *executed* statement, which is how we know the SQL run on 2026-08-21 was not this file.
+- Consequences to remember (the reason this item stays on record):
+  1. **Never re-run 00020 against production.** With only the underscored policies live, its four `create policy` statements would *succeed* under the spaced names — silently adding four duplicate policies — and only then abort at `alter table ... add column` with `42701 duplicate_column`.
+  2. **00020's own rollback block (lines 269-272) is invalid against production**: `drop policy "submission docs read" on storage.objects` would raise `42704 undefined_object`.
+  3. **A fresh environment built from the migrations gets the spaced names**, so any new dev/test database differs from production by identifier until this is reconciled.
+- Target: optional reconciliation after Informatique Exhib. Preferred option if ever taken: `alter policy "<live name>" on storage.objects rename to "<repo name>"` — a rename leaves the rule in force with no window in which the bucket is unprotected. Do **not** reconcile by dropping and recreating policies.
