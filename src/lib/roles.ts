@@ -34,6 +34,8 @@ export function eventRoleLabel(role: EventRole | null | undefined): string | nul
       return 'Activity Admin'
     case 'volunteer':
       return 'Volunteer'
+    case 'judge':
+      return 'Judge'
     default:
       return null
   }

@@ -2,6 +2,7 @@ import { Suspense, useCallback, useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useOutletContext, useParams } from 'react-router-dom'
 import { getClub, getEvent, getMyMembership, getMyParticipant, listMyClubMemberships } from '../../lib/api'
 import { useAuth } from '../../contexts/AuthContext'
+import { normalizeLeaderboardConfig } from '../../lib/leaderboard'
 import { clubRoleLabel, eventRoleLabel, platformRoleLabel } from '../../lib/roles'
 import type { Club, ClubRole, EmpEvent, EventRole, Participant } from '../../lib/types'
 
@@ -36,13 +37,15 @@ export function EventLayout() {
   const [loaded, setLoaded] = useState(false)
 
   const refresh = useCallback(async () => {
-    if (!eventId || !session) return
+    if (!eventId) return
     try {
+      // public-first: active/ended events load for signed-out visitors too
+      // (anon RLS, 00019); membership context only exists with a session
       const [ev, membership, part, clubMemberships] = await Promise.all([
         getEvent(eventId),
-        getMyMembership(eventId, session.user.id),
-        getMyParticipant(eventId, session.user.id),
-        listMyClubMemberships(session.user.id),
+        session ? getMyMembership(eventId, session.user.id) : Promise.resolve(null),
+        session ? getMyParticipant(eventId, session.user.id) : Promise.resolve(null),
+        session ? listMyClubMemberships(session.user.id) : Promise.resolve([]),
       ])
       if (!ev) {
         setError('Event not found (or you do not have access).')
@@ -80,6 +83,10 @@ export function EventLayout() {
   const isClubAdmin = isSuperAdmin || myClubRole === 'club_admin'
   const canManageEvent = isOrganizer || isClubAdmin
   const caps = event.capabilities
+  // event.leaderboard_config is already normalized at the api boundary; the
+  // helper is re-applied defensively for contexts constructing events manually
+  const lb = normalizeLeaderboardConfig(event.leaderboard_config, caps, event.public_leaderboard)
+  const showLeaderboardTab = lb.enabled && (lb.visibility !== 'hidden' || isStaff)
 
   const ctx: EventContext = {
     event, role, isOrganizer, isStaff, isClubAdmin, canManageEvent, participant, refresh,
@@ -108,12 +115,18 @@ export function EventLayout() {
       </div>
       <nav className="event-tabs">
         <NavLink to="" end>Overview</NavLink>
-        {caps.points && <NavLink to="leaderboard">Leaderboard</NavLink>}
+        {showLeaderboardTab && <NavLink to="leaderboard">Leaderboard</NavLink>}
         {/* registered people always get their dashboard; everyone else sees it only
             if they could still register (staff aren't shown a registration form) */}
-        {(participant || !isStaff) && <NavLink to="dashboard">My dashboard</NavLink>}
+        {(participant || !isStaff) && (
+          <NavLink to="dashboard">{participant ? 'My dashboard' : 'Register'}</NavLink>
+        )}
         {isStaff && caps.qr && <NavLink to="scan">Scan</NavLink>}
-        {isStaff && <NavLink to="activities">Activities</NavLink>}
+        {isStaff && <NavLink to="activities">Tasks</NavLink>}
+        {canManageEvent && caps.feedback && <NavLink to="feedback">Feedback</NavLink>}
+        {caps.judging && (isStaff || role === 'judge') && <NavLink to="judging">Judging</NavLink>}
+        {canManageEvent && <NavLink to="analytics">Analytics</NavLink>}
+        {canManageEvent && caps.certificates && <NavLink to="certificates">Certificates</NavLink>}
         {isOrganizer && <NavLink to="members">Members</NavLink>}
         {canManageEvent && <NavLink to="settings">Settings</NavLink>}
       </nav>

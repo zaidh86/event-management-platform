@@ -28,11 +28,12 @@ export function ClubLayout() {
   const [loaded, setLoaded] = useState(false)
 
   const refresh = useCallback(async () => {
-    if (!clubId || !session) return
+    if (!clubId) return
     try {
+      // public-first: the club itself loads for signed-out visitors too
       const [c, memberships] = await Promise.all([
         getClub(clubId),
-        listMyClubMemberships(session.user.id),
+        session ? listMyClubMemberships(session.user.id) : Promise.resolve([]),
       ])
       if (!c) {
         setError('Club not found.')
@@ -75,10 +76,12 @@ export function ClubLayout() {
         {club.logo_url && <img src={club.logo_url} alt="" className="event-logo" />}
         <div>
           <h1>{club.name}</h1>
+          {club.department && <p className="club-dept">{club.department}</p>}
           {clubRoleLabel(myClubRole) && <span className="badge">{clubRoleLabel(myClubRole)}</span>}
           {isSuperAdmin && !clubRoleLabel(myClubRole) && (
             <span className="badge badge-admin">{platformRoleLabel(profile?.role)}</span>
           )}
+          {club.description && <p className="club-blurb">{club.description}</p>}
         </div>
       </div>
       <nav className="event-tabs">

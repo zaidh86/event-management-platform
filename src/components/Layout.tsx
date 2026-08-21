@@ -1,28 +1,11 @@
 import { Link, Outlet, useNavigate } from 'react-router-dom'
 import { Suspense } from 'react'
-import { Moon, Sun, Monitor } from 'lucide-react'
+import { Settings } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
-import { useTheme, type ThemePref } from '../contexts/ThemeContext'
 import { platformRoleLabel } from '../lib/roles'
 
-const NEXT_PREF: Record<ThemePref, ThemePref> = { light: 'dark', dark: 'system', system: 'light' }
-const PREF_LABEL: Record<ThemePref, string> = { light: 'Light', dark: 'Dark', system: 'System' }
-
-function ThemeToggle() {
-  const { pref, setPref } = useTheme()
-  const Icon = pref === 'light' ? Sun : pref === 'dark' ? Moon : Monitor
-  const label = `Theme: ${PREF_LABEL[pref]}. Switch to ${PREF_LABEL[NEXT_PREF[pref]]}.`
-  return (
-    <button
-      className="btn btn-ghost btn-icon"
-      onClick={() => setPref(NEXT_PREF[pref])}
-      title={label}
-      aria-label={label}
-    >
-      <Icon size={16} aria-hidden />
-    </button>
-  )
-}
+// Theme selection lives in Settings → Appearance (single source of control);
+// the old topbar toggle was removed as a duplicate.
 
 export function AppLayout() {
   const { session, profile, signOut } = useAuth()
@@ -33,9 +16,14 @@ export function AppLayout() {
       <header className="topbar">
         <Link to="/" className="brand">EMP</Link>
         <nav className="topbar-nav">
-          <ThemeToggle />
           {session ? (
             <>
+              <Link
+                to="/settings" className="btn btn-ghost btn-icon"
+                title="Settings" aria-label="Settings"
+              >
+                <Settings size={16} aria-hidden />
+              </Link>
               <span className="topbar-user">
                 {profile?.full_name || session.user.email}
                 {platformRoleLabel(profile?.role) && (

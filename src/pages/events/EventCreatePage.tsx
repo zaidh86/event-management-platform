@@ -11,7 +11,8 @@ export function EventCreatePage() {
   const { club, canManage } = useClub()
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
-  const [isTeamEvent, setIsTeamEvent] = useState(false)
+  // which participation modes the event offers (ADR-0007)
+  const [participation, setParticipation] = useState<'solo' | 'team' | 'both'>('solo')
   const [teamMin, setTeamMin] = useState(2)
   const [teamMax, setTeamMax] = useState(4)
   // capabilities — off by default: an event is not a game unless configured as one
@@ -38,8 +39,11 @@ export function EventCreatePage() {
     setBusy(true)
     setError(null)
     try {
+      const soloEnabled = participation !== 'team'
+      const teamsEnabled = participation !== 'solo'
       const capabilities: EventCapabilities = {
-        teams: isTeamEvent,
+        solo: soloEnabled,
+        teams: teamsEnabled,
         points: capPoints,
         qr: capQr,
         games_api: capPoints && capGames,
@@ -54,9 +58,9 @@ export function EventCreatePage() {
         name,
         description,
         club_id: club.id,
-        is_team_event: isTeamEvent,
-        team_size_min: isTeamEvent ? teamMin : 1,
-        team_size_max: isTeamEvent ? teamMax : 1,
+        is_team_event: teamsEnabled,
+        team_size_min: teamsEnabled ? teamMin : 1,
+        team_size_max: teamsEnabled ? teamMax : 1,
         currency_name: currency || 'Point',
         currency_name_plural: currencyPlural || currency + 's',
         starting_balance: capPoints ? startingBalance : 0,
@@ -88,11 +92,15 @@ export function EventCreatePage() {
             Description
             <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
           </label>
-          <label className="check">
-            <input type="checkbox" checked={isTeamEvent} onChange={(e) => setIsTeamEvent(e.target.checked)} />
-            Team event (participants join or create teams)
+          <label>
+            Participation
+            <select value={participation} onChange={(e) => setParticipation(e.target.value as 'solo' | 'team' | 'both')}>
+              <option value="solo">Solo only — individuals participate on their own</option>
+              <option value="team">Teams only — participants join or create teams</option>
+              <option value="both">Solo + Teams — participants choose how to take part</option>
+            </select>
           </label>
-          {isTeamEvent && (
+          {participation !== 'solo' && (
             <div className="row">
               <label>
                 Min team size
@@ -111,18 +119,18 @@ export function EventCreatePage() {
           <p className="muted">Enable only what this event needs — each capability adds its own configuration and tabs.</p>
           <label className="check">
             <input type="checkbox" checked={capPoints} onChange={(e) => setCapPoints(e.target.checked)} />
-            Points &amp; live leaderboard (gamified scoring)
+            Points &amp; live leaderboard (scoring)
           </label>
           {capPoints && (
             <>
               <div className="row">
                 <label>
-                  Currency name (singular)
-                  <input value={currency} onChange={(e) => setCurrency(e.target.value)} placeholder="Chip" />
+                  Scoring unit (singular)
+                  <input value={currency} onChange={(e) => setCurrency(e.target.value)} placeholder="Point, Chip, Mark…" />
                 </label>
                 <label>
-                  Currency name (plural)
-                  <input value={currencyPlural} onChange={(e) => setCurrencyPlural(e.target.value)} placeholder="Chips" />
+                  Scoring unit (plural)
+                  <input value={currencyPlural} onChange={(e) => setCurrencyPlural(e.target.value)} placeholder="Points, Chips, Marks…" />
                 </label>
               </div>
               <label>

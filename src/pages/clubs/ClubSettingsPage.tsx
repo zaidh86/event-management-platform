@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { deleteClub, updateClub, uploadClubMedia } from '../../lib/api'
 import { useAuth } from '../../contexts/AuthContext'
+import { useToast } from '../../components/ui/Toast'
 import { useClub } from './ClubLayout'
 import type { Club } from '../../lib/types'
 
@@ -9,9 +10,10 @@ export function ClubSettingsPage() {
   const { club, canManage, refresh } = useClub()
   const { isSuperAdmin } = useAuth()
   const [name, setName] = useState(club.name)
+  const [department, setDepartment] = useState(club.department ?? '')
   const [description, setDescription] = useState(club.description)
+  const toast = useToast()
   const [error, setError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   if (!canManage) {
@@ -22,11 +24,10 @@ export function ClubSettingsPage() {
     e.preventDefault()
     setBusy(true)
     setError(null)
-    setNotice(null)
     try {
-      await updateClub(club.id, { name, description })
+      await updateClub(club.id, { name, department, description })
       await refresh()
-      setNotice('Saved.')
+      toast('success', 'Settings saved')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed')
     } finally {
@@ -41,7 +42,7 @@ export function ClubSettingsPage() {
       const url = await uploadClubMedia(club.id, file, kind.replace('_url', ''))
       await updateClub(club.id, { [kind]: url })
       await refresh()
-      setNotice('Image updated.')
+      toast('success', 'Image updated')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed')
     }
@@ -60,6 +61,13 @@ export function ClubSettingsPage() {
           <label>
             Description
             <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
+          </label>
+          <label>
+            Department
+            <input
+              value={department} onChange={(e) => setDepartment(e.target.value)}
+              placeholder="e.g. Department of Computer Science"
+            />
           </label>
           <p className="muted">Club link: <code>/clubs/{club.id}</code> · slug: <code>{club.slug}</code></p>
         </section>
@@ -81,7 +89,6 @@ export function ClubSettingsPage() {
         </section>
 
         {error && <p className="form-error">{error}</p>}
-        {notice && <p className="form-notice">{notice}</p>}
         <button className="btn btn-primary" disabled={busy}>{busy ? 'Saving…' : 'Save settings'}</button>
       </form>
 

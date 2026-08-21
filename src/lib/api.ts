@@ -1,10 +1,16 @@
 // Typed data-access helpers. Pages call these instead of building queries inline.
 import { supabase } from './supabase'
 import { normalizeCapabilities } from './capabilities'
+import { normalizeLeaderboardConfig } from './leaderboard'
+import { normalizeSubmissionConfig } from './submissions'
 import type {
-  Activity, Announcement, Club, ClubMember, ClubRole, EmpEvent, EventMember,
-  LeaderboardRow, Participant, Profile, QrResolution, Team, Transaction, TransactionType,
+  Activity, Announcement, AttendanceRecord, Club, ClubMember, ClubRole, EmpEvent,
+  EventMember, FeedbackForm, FeedbackResponse, JudgeEvaluation, JudgingCriterion,
+  JudgingResult, LeaderboardRow, Participant, ParticipationMode, Profile,
+  PublicQrResolution, QrAction, QrConfig, QrResolution, ScanOutcome, ScanRecord,
+  Submission, Team, Transaction, TransactionType, VerifiedCertificate,
 } from './types'
+import type { Certificate, CertificateKind } from './types'
 
 function throwIf(error: { message: string } | null): void {
   if (error) throw new Error(error.message)
@@ -13,10 +19,17 @@ function throwIf(error: { message: string } | null): void {
 // Rows created before migrations 00005/00006 lack club_id/capabilities;
 // normalize at the boundary so EmpEvent is always fully populated.
 function toEvent(row: Record<string, unknown>): EmpEvent {
+  const capabilities = normalizeCapabilities(row.capabilities, row.is_team_event === true)
   return {
     ...(row as unknown as EmpEvent),
     club_id: (row.club_id as string | undefined) ?? null,
-    capabilities: normalizeCapabilities(row.capabilities, row.is_team_event === true),
+    capabilities,
+    leaderboard_config: normalizeLeaderboardConfig(
+      row.leaderboard_config, capabilities, row.public_leaderboard === true,
+    ),
+    // rows from a live DB that predates 00015 lack the column
+    is_featured: row.is_featured === true,
+    submission_config: normalizeSubmissionConfig(row.submission_config),
   }
 }
 
@@ -72,6 +85,74 @@ export async function deleteEvent(id: string): Promise<void> {
   if (!data || data.length === 0) {
     throw new Error('Event was not deleted — you do not have permission to delete this event.')
   }
+}
+
+// featured events for the Home page: explicit platform curation (ADR-0010)
+export async function listFeaturedEvents(): Promise<EmpEvent[]> {
+  const { data, error } = await supabase
+    .from('events').select('*')
+    .eq('is_featured', true)
+    .in('status', ['active', 'ended'])
+    .order('created_at', { ascending: false })
+  throwIf(error)
+  return (data ?? []).map(toEvent)
+}
+
+// platform admins only — the protect_event_featured trigger is the enforcement;
+// the returned row proves the write happened (RLS no-ops return zero rows)
+export async function setEventFeatured(id: string, featured: boolean): Promise<void> {
+  const { data, error } = await supabase
+    .from('events').update({ is_featured: featured }).eq('id', id).select('id')
+  throwIf(error)
+  if (!data || data.length === 0) {
+    throw new Error('Not permitted — only platform administrators can feature events.')
+  }
+}
+
+// ---- profiles / platform administration -------------------------------------
+
+export async function updateMyProfile(userId: string, fullName: string): Promise<void> {
+  const { data, error } = await supabase
+    .from('profiles').update({ full_name: fullName.trim() }).eq('id', userId).select('id')
+  throwIf(error)
+  if (!data || data.length === 0) throw new Error('Profile was not updated.')
+}
+
+export async function listPlatformAdmins(): Promise<Profile[]> {
+  const { data, error } = await supabase
+    .from('profiles').select('*')
+    .in('role', ['platform_owner', 'super_admin'])
+    .order('role', { ascending: false }).order('created_at')
+  throwIf(error)
+  return (data ?? []) as Profile[]
+}
+
+export async function searchProfiles(query: string): Promise<Profile[]> {
+  const q = query.trim()
+  if (!q) return []
+  const { data, error } = await supabase
+    .from('profiles').select('*')
+    .or(`email.ilike.%${q}%,full_name.ilike.%${q}%`)
+    .order('email').limit(10)
+  throwIf(error)
+  return (data ?? []) as Profile[]
+}
+
+// grant/revoke super admin. The protect_profile_role trigger is the real
+// authorization (super admins only; the owner row is untouchable).
+export async function setGlobalRole(userId: string, role: 'user' | 'super_admin'): Promise<void> {
+  const { data, error } = await supabase
+    .from('profiles').update({ role }).eq('id', userId).select('id')
+  throwIf(error)
+  if (!data || data.length === 0) throw new Error('Role was not changed — not permitted.')
+}
+
+// atomic owner handover (00015): caller must BE the platform owner
+export async function transferPlatformOwnership(newOwnerId: string): Promise<void> {
+  const { error } = await supabase.rpc('transfer_platform_ownership', {
+    p_new_owner_id: newOwnerId,
+  })
+  throwIf(error)
 }
 
 // ---- clubs -----------------------------------------------------------------
@@ -163,8 +244,12 @@ export async function updateClubMemberRole(memberId: string, role: ClubRole): Pr
 }
 
 export async function removeClubMember(memberId: string): Promise<void> {
-  const { error } = await supabase.from('club_members').delete().eq('id', memberId)
+  const { data, error } = await supabase
+    .from('club_members').delete().eq('id', memberId).select('id')
   throwIf(error)
+  if (!data || data.length === 0) {
+    throw new Error('Member was not removed — you do not have permission.')
+  }
 }
 
 export async function listClubEvents(clubId: string): Promise<EmpEvent[]> {
@@ -211,17 +296,23 @@ export async function updateMemberRole(memberId: string, role: string): Promise<
 }
 
 export async function removeMember(memberId: string): Promise<void> {
-  const { error } = await supabase.from('event_members').delete().eq('id', memberId)
+  const { data, error } = await supabase
+    .from('event_members').delete().eq('id', memberId).select('id')
   throwIf(error)
+  if (!data || data.length === 0) {
+    throw new Error('Member was not removed — you do not have permission.')
+  }
 }
 
 // ---- registration / participants / teams -----------------------------------
 
 export async function registerForEvent(
   eventId: string, displayName: string, registrationData: Record<string, unknown>,
+  participationMode: ParticipationMode,
 ): Promise<Participant> {
   const { data, error } = await supabase.rpc('register_for_event', {
     p_event_id: eventId, p_display_name: displayName, p_registration_data: registrationData,
+    p_participation_mode: participationMode,
   })
   throwIf(error)
   return data as Participant
@@ -328,6 +419,359 @@ export async function resolveQr(qrToken: string): Promise<QrResolution> {
   return data as QrResolution
 }
 
+// ---- universal QR operations (ADR-0009) -------------------------------------
+
+export async function listQrConfigs(eventId: string): Promise<QrConfig[]> {
+  const { data, error } = await supabase
+    .from('qr_configs').select('*').eq('event_id', eventId)
+    .order('sort_order').order('created_at')
+  throwIf(error)
+  return (data ?? []) as QrConfig[]
+}
+
+export async function createQrConfig(fields: Partial<QrConfig> & {
+  event_id: string; label: string; target: string; actions: string[]
+}): Promise<QrConfig> {
+  const { data, error } = await supabase.from('qr_configs').insert(fields).select().single()
+  throwIf(error)
+  return data as QrConfig
+}
+
+export async function updateQrConfig(id: string, fields: Partial<QrConfig>): Promise<QrConfig> {
+  const { data, error } = await supabase
+    .from('qr_configs').update(fields).eq('id', id).select().single()
+  throwIf(error)
+  return data as QrConfig
+}
+
+// RLS-blocked deletes return zero rows, not an error — verify the row is gone
+export async function deleteQrConfig(id: string): Promise<void> {
+  const { data, error } = await supabase.from('qr_configs').delete().eq('id', id).select('id')
+  throwIf(error)
+  if (!data || data.length === 0) {
+    throw new Error('QR operation was not deleted — you do not have permission.')
+  }
+}
+
+// the universal station entry point: all validation/authorization is server-side
+export async function performScan(
+  qrConfigId: string, qrToken: string, action: QrAction, note = '',
+): Promise<ScanOutcome> {
+  const { data, error } = await supabase.rpc('perform_scan', {
+    p_qr_config_id: qrConfigId, p_qr_token: qrToken.trim(), p_action: action, p_note: note,
+  })
+  throwIf(error)
+  return data as ScanOutcome
+}
+
+// anon-safe resolution of event/feedback q_ tokens (poster QRs)
+export async function resolvePublicQr(token: string): Promise<PublicQrResolution> {
+  const { data, error } = await supabase.rpc('resolve_public_qr', { p_token: token.trim() })
+  throwIf(error)
+  return data as PublicQrResolution
+}
+
+// ---- attendance --------------------------------------------------------------
+
+export async function getMyAttendance(
+  eventId: string, participantId: string,
+): Promise<AttendanceRecord | null> {
+  const { data, error } = await supabase
+    .from('attendance').select('*')
+    .eq('event_id', eventId).eq('participant_id', participantId).maybeSingle()
+  throwIf(error)
+  return data as AttendanceRecord | null
+}
+
+export async function countAttendance(eventId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('attendance').select('id', { count: 'exact', head: true }).eq('event_id', eventId)
+  throwIf(error)
+  return count ?? 0
+}
+
+// ---- feedback ------------------------------------------------------------------
+
+export async function listFeedbackForms(eventId: string): Promise<FeedbackForm[]> {
+  const { data, error } = await supabase
+    .from('feedback_forms').select('*').eq('event_id', eventId)
+    .order('created_at', { ascending: false })
+  throwIf(error)
+  return (data ?? []) as FeedbackForm[]
+}
+
+// public/participant fill page: RLS scopes visibility (anon sees only
+// published public forms; members also see published participant forms)
+export async function getFeedbackForm(formId: string): Promise<FeedbackForm | null> {
+  const { data, error } = await supabase
+    .from('feedback_forms').select('*').eq('id', formId).maybeSingle()
+  throwIf(error)
+  return data as FeedbackForm | null
+}
+
+export async function createFeedbackForm(fields: Partial<FeedbackForm> & {
+  event_id: string; title: string
+}): Promise<FeedbackForm> {
+  const { data, error } = await supabase.from('feedback_forms').insert(fields).select().single()
+  throwIf(error)
+  return data as FeedbackForm
+}
+
+export async function updateFeedbackForm(id: string, fields: Partial<FeedbackForm>): Promise<FeedbackForm> {
+  const { data, error } = await supabase
+    .from('feedback_forms').update(fields).eq('id', id).select().single()
+  throwIf(error)
+  return data as FeedbackForm
+}
+
+export async function deleteFeedbackForm(id: string): Promise<void> {
+  const { data, error } = await supabase.from('feedback_forms').delete().eq('id', id).select('id')
+  throwIf(error)
+  if (!data || data.length === 0) {
+    throw new Error('Feedback form was not deleted — you do not have permission.')
+  }
+}
+
+// target = what the response is ABOUT (the event itself, a team, or a
+// participant). Dedupe is per respondent per target, enforced server-side.
+export async function submitFeedback(
+  formId: string, answers: Record<string, unknown>,
+  target?: { type: 'team' | 'participant'; id: string },
+): Promise<{ status: 'ok' | 'duplicate'; message?: string }> {
+  const { data, error } = await supabase.rpc('submit_feedback', {
+    p_form_id: formId, p_answers: answers,
+    p_target_type: target?.type ?? 'event',
+    p_target_id: target?.id ?? null,
+  })
+  throwIf(error)
+  return data as { status: 'ok' | 'duplicate'; message?: string }
+}
+
+export async function countFeedbackResponses(formId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('feedback_responses').select('id', { count: 'exact', head: true }).eq('form_id', formId)
+  throwIf(error)
+  return count ?? 0
+}
+
+export async function listFeedbackResponses(formId: string): Promise<FeedbackResponse[]> {
+  const { data, error } = await supabase
+    .from('feedback_responses').select('*').eq('form_id', formId)
+    .order('created_at', { ascending: false })
+  throwIf(error)
+  return (data ?? []) as FeedbackResponse[]
+}
+
+// ---- submissions & judging (ADR-0011) ----------------------------------------
+
+// the caller's own entry: RLS returns only rows they own (solo or via team)
+export async function getMySubmission(
+  eventId: string, participant: Participant,
+): Promise<Submission | null> {
+  const q = supabase.from('submissions').select('*').eq('event_id', eventId)
+  const { data, error } = participant.participation_mode === 'team' && participant.team_id
+    ? await q.eq('team_id', participant.team_id).maybeSingle()
+    : await q.eq('participant_id', participant.id).maybeSingle()
+  throwIf(error)
+  return data as Submission | null
+}
+
+export async function listSubmissions(eventId: string): Promise<Submission[]> {
+  const { data, error } = await supabase
+    .from('submissions').select('*').eq('event_id', eventId)
+    .order('submitted_at', { ascending: true })
+  throwIf(error)
+  return (data ?? []) as Submission[]
+}
+
+// server-enforced: capability, active event, deadline, ownership by mode.
+// documentPath: undefined = keep the stored PDF reference, '' = clear it,
+// canonical path = record it (validated server-side, 00020)
+export async function saveSubmission(input: {
+  eventId: string; title: string; description?: string
+  content?: Record<string, unknown>; submit?: boolean
+  documentPath?: string; documentName?: string
+}): Promise<Submission> {
+  const { data, error } = await supabase.rpc('save_submission', {
+    p_event_id: input.eventId,
+    p_title: input.title,
+    p_description: input.description ?? '',
+    p_content: input.content ?? {},
+    p_submit: input.submit ?? false,
+    p_document_path: input.documentPath ?? null,
+    p_document_name: input.documentName ?? null,
+  })
+  throwIf(error)
+  return data as Submission
+}
+
+// ---- submission documents (00020: private `submission-docs` bucket) ---------
+// One PDF per submission at the canonical path {event}/{submission}.pdf —
+// replacement is an upsert of the same object. The bucket enforces PDF-only
+// and a 10 MB cap server-side; storage RLS mirrors submission visibility.
+
+const SUBMISSION_DOC_MAX_BYTES = 10 * 1024 * 1024
+
+export function submissionDocumentPath(eventId: string, submissionId: string): string {
+  return `${eventId}/${submissionId}.pdf`
+}
+
+export async function uploadSubmissionDocument(
+  eventId: string, submissionId: string, file: File,
+): Promise<{ path: string; name: string }> {
+  const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+  if (!isPdf) throw new Error('Only PDF files are accepted.')
+  if (file.size > SUBMISSION_DOC_MAX_BYTES) {
+    throw new Error('This PDF is too large — the limit is 10 MB.')
+  }
+  const path = submissionDocumentPath(eventId, submissionId)
+  const { error } = await supabase.storage
+    .from('submission-docs')
+    .upload(path, file, { upsert: true, contentType: 'application/pdf' })
+  throwIf(error)
+  return { path, name: file.name }
+}
+
+// short-lived signed URL; storage RLS decides who may create it
+export async function getSubmissionDocumentUrl(path: string): Promise<string> {
+  const { data, error } = await supabase.storage
+    .from('submission-docs').createSignedUrl(path, 300)
+  throwIf(error)
+  if (!data?.signedUrl) throw new Error('Could not open the document.')
+  return data.signedUrl
+}
+
+export async function removeSubmissionDocument(path: string): Promise<void> {
+  const { error } = await supabase.storage.from('submission-docs').remove([path])
+  throwIf(error)
+}
+
+export async function listCriteria(eventId: string): Promise<JudgingCriterion[]> {
+  const { data, error } = await supabase
+    .from('judging_criteria').select('*').eq('event_id', eventId)
+    .order('sort_order').order('created_at')
+  throwIf(error)
+  return (data ?? []) as JudgingCriterion[]
+}
+
+export async function createCriterion(fields: Partial<JudgingCriterion> & {
+  event_id: string; name: string
+}): Promise<JudgingCriterion> {
+  const { data, error } = await supabase.from('judging_criteria').insert(fields).select().single()
+  throwIf(error)
+  return data as JudgingCriterion
+}
+
+export async function updateCriterion(id: string, fields: Partial<JudgingCriterion>): Promise<JudgingCriterion> {
+  const { data, error } = await supabase
+    .from('judging_criteria').update(fields).eq('id', id).select().single()
+  throwIf(error)
+  return data as JudgingCriterion
+}
+
+export async function deleteCriterion(id: string): Promise<void> {
+  const { data, error } = await supabase
+    .from('judging_criteria').delete().eq('id', id).select('id')
+  throwIf(error)
+  if (!data || data.length === 0) {
+    throw new Error('Criterion was not deleted — you do not have permission.')
+  }
+}
+
+// a judge's own evaluations for the event (RLS scopes to judge_id = auth.uid())
+export async function listMyEvaluations(eventId: string): Promise<JudgeEvaluation[]> {
+  const { data, error } = await supabase
+    .from('judge_evaluations').select('*').eq('event_id', eventId)
+  throwIf(error)
+  return (data ?? []) as JudgeEvaluation[]
+}
+
+// all evaluations of one submission — Event Managers only (RLS)
+export async function listSubmissionEvaluations(submissionId: string): Promise<JudgeEvaluation[]> {
+  const { data, error } = await supabase
+    .from('judge_evaluations').select('*').eq('submission_id', submissionId)
+  throwIf(error)
+  return (data ?? []) as JudgeEvaluation[]
+}
+
+export async function saveEvaluation(input: {
+  submissionId: string; scores: Record<string, number>; notes?: string; finalize?: boolean
+}): Promise<JudgeEvaluation> {
+  const { data, error } = await supabase.rpc('save_evaluation', {
+    p_submission_id: input.submissionId,
+    p_scores: input.scores,
+    p_notes: input.notes ?? '',
+    p_finalize: input.finalize ?? false,
+  })
+  throwIf(error)
+  return data as JudgeEvaluation
+}
+
+export async function getJudgingResults(eventId: string): Promise<JudgingResult[]> {
+  const { data, error } = await supabase.rpc('get_judging_results', { p_event_id: eventId })
+  throwIf(error)
+  return (data ?? []) as JudgingResult[]
+}
+
+// ---- analytics / certificates (ADR-0012) --------------------------------------
+
+// staff-only via scans RLS; analytics aggregates client-side
+export async function listScans(eventId: string, limit = 1000): Promise<ScanRecord[]> {
+  const { data, error } = await supabase
+    .from('scans').select('*').eq('event_id', eventId)
+    .order('created_at', { ascending: false }).limit(limit)
+  throwIf(error)
+  return (data ?? []) as ScanRecord[]
+}
+
+// RLS scopes rows: managers see all of the event's certificates, holders their own
+export async function listCertificates(eventId: string): Promise<Certificate[]> {
+  const { data, error } = await supabase
+    .from('certificates').select('*').eq('event_id', eventId)
+    .order('created_at', { ascending: false })
+  throwIf(error)
+  return (data ?? []) as Certificate[]
+}
+
+export async function issueCertificates(input: {
+  eventId: string; kind: CertificateKind; title: string; detail?: string
+  scope: 'registered' | 'attended' | 'participant' | 'team'; targetId?: string
+}): Promise<{ issued: number; skipped: number }> {
+  const { data, error } = await supabase.rpc('issue_certificates', {
+    p_event_id: input.eventId, p_kind: input.kind, p_title: input.title,
+    p_detail: input.detail ?? '', p_scope: input.scope, p_target_id: input.targetId ?? null,
+  })
+  throwIf(error)
+  return data as { issued: number; skipped: number }
+}
+
+export async function revokeCertificate(id: string): Promise<void> {
+  const { data, error } = await supabase.from('certificates').delete().eq('id', id).select('id')
+  throwIf(error)
+  if (!data || data.length === 0) {
+    throw new Error('Certificate was not revoked — you do not have permission.')
+  }
+}
+
+// anon-safe public verification by opaque code
+export async function verifyCertificate(code: string): Promise<VerifiedCertificate> {
+  const { data, error } = await supabase.rpc('verify_certificate', { p_code: code.trim() })
+  throwIf(error)
+  return data as VerifiedCertificate
+}
+
+// LLM-backed assistant (Edge Function; ADR-0012). Throws when not deployed —
+// callers fall back to the deterministic data-lookup answers.
+export async function askEventAssistant(eventId: string, question: string): Promise<string> {
+  const { data, error } = await supabase.functions.invoke('event-assistant', {
+    body: { event_id: eventId, question },
+  })
+  if (error) throw new Error(error.message)
+  const answer = (data as { answer?: string } | null)?.answer
+  if (!answer) throw new Error('No answer from assistant')
+  return answer
+}
+
 // ---- leaderboard -----------------------------------------------------------
 
 export async function getLeaderboard(eventId: string): Promise<LeaderboardRow[]> {
@@ -361,8 +805,12 @@ export async function updateActivity(id: string, fields: Partial<Activity>): Pro
 }
 
 export async function deleteActivity(id: string): Promise<void> {
-  const { error } = await supabase.from('activities').delete().eq('id', id)
+  const { data, error } = await supabase
+    .from('activities').delete().eq('id', id).select('id')
   throwIf(error)
+  if (!data || data.length === 0) {
+    throw new Error('Task was not deleted — you do not have permission.')
+  }
 }
 
 // Generates an API key for an integrated activity. The plaintext is returned

@@ -26,7 +26,7 @@ export function LoginPage() {
 
   return (
     <div className="auth-card">
-      <h1>Sign in</h1>
+      <h1>Log in</h1>
       <form onSubmit={(e) => void onSubmit(e)} className="stack">
         <label>
           Email
@@ -37,8 +37,9 @@ export function LoginPage() {
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" />
         </label>
         {error && <p className="form-error">{error}</p>}
-        <button className="btn btn-primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
+        <button className="btn btn-primary" disabled={busy}>{busy ? 'Logging in…' : 'Log in'}</button>
       </form>
+      <p className="auth-alt"><Link to="/forgot-password">Forgot password?</Link></p>
       <p className="auth-alt">No account? <Link to="/signup">Sign up</Link></p>
     </div>
   )

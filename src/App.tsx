@@ -62,6 +62,45 @@ const SettingsPage = lazy(() =>
 const PublicLeaderboardPage = lazy(() =>
   import('./pages/public/PublicLeaderboardPage').then((m) => ({ default: m.PublicLeaderboardPage })),
 )
+const ProjectorPage = lazy(() =>
+  import('./pages/public/ProjectorPage').then((m) => ({ default: m.ProjectorPage })),
+)
+const PublicQrPage = lazy(() =>
+  import('./pages/public/PublicQrPage').then((m) => ({ default: m.PublicQrPage })),
+)
+const FeedbackFillPage = lazy(() =>
+  import('./pages/public/FeedbackFillPage').then((m) => ({ default: m.FeedbackFillPage })),
+)
+const FeedbackPage = lazy(() =>
+  import('./pages/events/FeedbackPage').then((m) => ({ default: m.FeedbackPage })),
+)
+const AnalyticsPage = lazy(() =>
+  import('./pages/events/AnalyticsPage').then((m) => ({ default: m.AnalyticsPage })),
+)
+const ReportPage = lazy(() =>
+  import('./pages/events/ReportPage').then((m) => ({ default: m.ReportPage })),
+)
+const CertificatesPage = lazy(() =>
+  import('./pages/events/CertificatesPage').then((m) => ({ default: m.CertificatesPage })),
+)
+const CertificateVerifyPage = lazy(() =>
+  import('./pages/public/CertificateVerifyPage').then((m) => ({ default: m.CertificateVerifyPage })),
+)
+const ForgotPasswordPage = lazy(() =>
+  import('./pages/auth/ForgotPasswordPage').then((m) => ({ default: m.ForgotPasswordPage })),
+)
+const ResetPasswordPage = lazy(() =>
+  import('./pages/auth/ResetPasswordPage').then((m) => ({ default: m.ResetPasswordPage })),
+)
+const JudgingPage = lazy(() =>
+  import('./pages/events/JudgingPage').then((m) => ({ default: m.JudgingPage })),
+)
+const AccountSettingsPage = lazy(() =>
+  import('./pages/settings/AccountSettingsPage').then((m) => ({ default: m.AccountSettingsPage })),
+)
+const PlatformAdminPage = lazy(() =>
+  import('./pages/settings/PlatformAdminPage').then((m) => ({ default: m.PlatformAdminPage })),
+)
 
 function SetupScreen() {
   return (
@@ -95,35 +134,86 @@ export default function App() {
             }
           />
 
+          {/* projector mode — venue display, same access rules as the leaderboard */}
+          <Route
+            path="/e/:slug/projector"
+            element={
+              <Suspense fallback={<div className="page-loading">Loading…</div>}>
+                <ProjectorPage />
+              </Suspense>
+            }
+          />
+          {/* scanned event/feedback QR landing (poster QRs encode /q/:token) */}
+          <Route
+            path="/q/:token"
+            element={
+              <Suspense fallback={<div className="page-loading">Loading…</div>}>
+                <PublicQrPage />
+              </Suspense>
+            }
+          />
+          {/* public certificate verification (print-ready) */}
+          <Route
+            path="/cert/:code"
+            element={
+              <Suspense fallback={<div className="page-loading">Loading…</div>}>
+                <CertificateVerifyPage />
+              </Suspense>
+            }
+          />
+          {/* respondent-facing feedback form (public or participants) */}
+          <Route
+            path="/f/:formId"
+            element={
+              <Suspense fallback={<div className="page-loading">Loading…</div>}>
+                <FeedbackFillPage />
+              </Suspense>
+            }
+          />
+
           <Route element={<AppLayout />}>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/signup" element={<SignupPage />} />
-            <Route element={<RequireAuth />}>
-              <Route path="/" element={<HomePage />} />
+            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
 
-              {/* club-first flow: clubs contain events */}
-              <Route path="/clubs/new" element={<ClubCreatePage />} />
-              <Route path="/clubs/:clubId" element={<ClubLayout />}>
-                <Route index element={<ClubOverviewPage />} />
-                <Route path="events" element={<ClubEventsPage />} />
+            {/* PUBLIC-FIRST BROWSING: home, clubs and events are browsable
+                signed-out (anon RLS scopes the data; 00019). Authentication is
+                requested only when an action needs an account — pages behind
+                role/participant gates render their own refusals. */}
+            <Route path="/" element={<HomePage />} />
+            <Route path="/clubs/:clubId" element={<ClubLayout />}>
+              <Route index element={<ClubOverviewPage />} />
+              <Route path="events" element={<ClubEventsPage />} />
+              {/* club management stays signed-in only */}
+              <Route element={<RequireAuth />}>
                 <Route path="events/new" element={<EventCreatePage />} />
                 <Route path="members" element={<ClubMembersPage />} />
                 <Route path="settings" element={<ClubSettingsPage />} />
               </Route>
+            </Route>
+            <Route path="/events/:eventId" element={<EventLayout />}>
+              <Route index element={<OverviewPage />} />
+              <Route path="leaderboard" element={<LeaderboardPage />} />
+              <Route path="dashboard" element={<DashboardPage />} />
+              <Route path="scan" element={<ScanPage />} />
+              <Route path="activities" element={<ActivitiesPage />} />
+              <Route path="feedback" element={<FeedbackPage />} />
+              <Route path="judging" element={<JudgingPage />} />
+              <Route path="analytics" element={<AnalyticsPage />} />
+              <Route path="report" element={<ReportPage />} />
+              <Route path="certificates" element={<CertificatesPage />} />
+              <Route path="members" element={<MembersPage />} />
+              <Route path="settings" element={<SettingsPage />} />
+            </Route>
 
+            <Route element={<RequireAuth />}>
+              <Route path="/settings" element={<AccountSettingsPage />} />
+              <Route path="/admin" element={<PlatformAdminPage />} />
+              <Route path="/clubs/new" element={<ClubCreatePage />} />
               {/* legacy event-first entry point — routes into the club-first flow
                   instead of creating a club-less event */}
               <Route path="/events/new" element={<EventCreateRedirect />} />
-
-              <Route path="/events/:eventId" element={<EventLayout />}>
-                <Route index element={<OverviewPage />} />
-                <Route path="leaderboard" element={<LeaderboardPage />} />
-                <Route path="dashboard" element={<DashboardPage />} />
-                <Route path="scan" element={<ScanPage />} />
-                <Route path="activities" element={<ActivitiesPage />} />
-                <Route path="members" element={<MembersPage />} />
-                <Route path="settings" element={<SettingsPage />} />
-              </Route>
             </Route>
           </Route>
         </Routes>

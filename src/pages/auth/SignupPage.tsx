@@ -29,7 +29,7 @@ export function SignupPage() {
       navigate('/', { replace: true })
     } else {
       // email confirmation enabled on the Supabase project
-      setNotice('Check your email to confirm your account, then sign in.')
+      setNotice('Check your email to confirm your account, then log in.')
     }
   }
 
@@ -56,7 +56,7 @@ export function SignupPage() {
         {notice && <p className="form-notice">{notice}</p>}
         <button className="btn btn-primary" disabled={busy}>{busy ? 'Creating…' : 'Sign up'}</button>
       </form>
-      <p className="auth-alt">Already have an account? <Link to="/login">Sign in</Link></p>
+      <p className="auth-alt">Already have an account? <Link to="/login">Log in</Link></p>
     </div>
   )
 }

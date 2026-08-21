@@ -1,90 +1,356 @@
 import { lazy, Suspense, useEffect, useState, type FormEvent } from 'react'
-import { listActivities, processTransaction, resolveQr } from '../../lib/api'
-import { fmtPoints } from '../../lib/format'
+import { useNavigate } from 'react-router-dom'
+import { AlertTriangle, CheckCircle2 } from 'lucide-react'
+import {
+  countAttendance, listActivities, listCriteria, listMyEvaluations, performScan,
+  processTransaction, resolveQr,
+} from '../../lib/api'
+import { supabase } from '../../lib/supabase'
+import { fmtDateTime, fmtPoints } from '../../lib/format'
+import { ACTION_LABELS, stationConfigs } from '../../lib/qr'
+import { listQrConfigs } from '../../lib/api'
+import { EvaluationEditor } from './JudgingPage'
+import type {
+  Activity, JudgeEvaluation, JudgingCriterion, QrAction, QrConfig, QrResolution,
+  ScanOutcome, Submission,
+} from '../../lib/types'
 
 // html5-qrcode is heavy — load it only when the scan page is opened
 const Scanner = lazy(() =>
   import('../../components/Scanner').then((m) => ({ default: m.Scanner })),
 )
 import { useEvent } from './EventLayout'
-import type { Activity, QrResolution } from '../../lib/types'
 
-// Volunteer / activity admin station: scan a QR (or type the token),
-// see who it is, then award or deduct points — optionally tied to an activity.
+// Universal scan station (ADR-0009). Staff pick the QR OPERATION the station is
+// running (from the event's configured QR operations), scan, and the server
+// validates everything: config, event, action, authorization, target, duplicate
+// rules. With no configured operations the station falls back to the legacy
+// scoring flow (resolve_qr), so pre-00014 events behave exactly as before.
+
+const LEGACY_ID = '__legacy_scoring__'
+
 export function ScanPage() {
-  const { event, isStaff } = useEvent()
-  const [scanning, setScanning] = useState(true)
+  const { event, isStaff, role } = useEvent()
+  const isJudge = role === 'judge'
+  const navigate = useNavigate()
+  const [configs, setConfigs] = useState<QrConfig[] | null>(null)
+  const [opId, setOpId] = useState<string>('')
+  const [action, setAction] = useState<QrAction | ''>('')
   const [manual, setManual] = useState('')
-  const [target, setTarget] = useState<QrResolution | null>(null)
   const [activities, setActivities] = useState<Activity[]>([])
+  const [scoringTarget, setScoringTarget] = useState<QrResolution | null>(null)
+  const [judgeTarget, setJudgeTarget] = useState<{ teamId: string | null; participantId: string | null; name: string } | null>(null)
+  const [outcome, setOutcome] = useState<ScanOutcome | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [attended, setAttended] = useState<number | null>(null)
 
   useEffect(() => {
     listActivities(event.id)
       .then((a) => setActivities(a.filter((x) => x.is_active)))
       .catch(() => {})
-  }, [event.id])
+    listQrConfigs(event.id)
+      .then((all) => {
+        // judges (existing event role, 00016) see only the operations that
+        // authorize them; staff see every station operation
+        const ops = stationConfigs(all).filter(
+          (c) => isStaff || c.scanner_access.includes('judge'),
+        )
+        setConfigs(ops)
+        setOpId(ops.length > 0 ? ops[0].id : isStaff && event.capabilities.points ? LEGACY_ID : '')
+        setAction(ops.length > 0 ? ops[0].actions[0] : 'scoring')
+      })
+      .catch(() => {
+        setConfigs([])
+        setOpId(isStaff && event.capabilities.points ? LEGACY_ID : '')
+        setAction('scoring')
+      })
+  }, [event.id, event.capabilities.points, isStaff])
 
-  async function lookup(token: string) {
+  const current = (configs ?? []).find((c) => c.id === opId) ?? null
+  const isAttendanceOp = current !== null && action === 'attendance'
+
+  useEffect(() => {
+    if (isAttendanceOp) {
+      countAttendance(event.id).then(setAttended).catch(() => {})
+    }
+  }, [isAttendanceOp, event.id, outcome])
+
+  function selectOp(id: string) {
+    setOpId(id)
     setError(null)
+    setOutcome(null)
+    setScoringTarget(null)
+    const cfg = (configs ?? []).find((c) => c.id === id)
+    setAction(cfg ? cfg.actions[0] : 'scoring')
+  }
+
+  async function handleToken(token: string) {
+    const t = token.trim()
+    if (!t || busy) return
+    setBusy(true)
+    setError(null)
+    setOutcome(null)
     try {
-      const info = await resolveQr(token.trim())
-      if (info.event_id !== event.id) {
-        setError('That QR code belongs to a different event.')
+      if (!current) {
+        // legacy scoring flow: resolve, then award via the existing panel
+        const info = await resolveQr(t)
+        if (info.event_id !== event.id) {
+          setError('That QR code belongs to a different event.')
+          return
+        }
+        setScoringTarget(info)
         return
       }
-      setTarget(info)
-      setScanning(false)
+      const result = await performScan(current.id, t, action as QrAction)
+      if (result.action === 'feedback' && result.status === 'ok' && result.form_id) {
+        // open the configured form pre-bound to the scanned target; the server
+        // enforces per-target dedupe on submission (00019)
+        const ti = result.team_id ?? result.participant_id ?? ''
+        navigate(`/f/${result.form_id}?tt=${result.kind ?? 'team'}&ti=${ti}&tn=${encodeURIComponent(result.name)}`)
+        return
+      }
+      if (result.action === 'scoring' && result.status === 'ok'
+          && ((isJudge && !isStaff) || (!event.capabilities.points && event.capabilities.judging))) {
+        // judges evaluate against the judging criteria (00016) — never the
+        // points ledger; staff land here too when the event has judging but
+        // no points ledger (nothing to award). Opens the team/participant's
+        // submission evaluation in the EXISTING judging editor.
+        setJudgeTarget({
+          teamId: result.team_id ?? null,
+          participantId: result.kind === 'participant' ? result.participant_id ?? null : null,
+          name: result.name,
+        })
+        return
+      }
+      if (result.action === 'scoring' && result.status === 'ok') {
+        setScoringTarget({
+          kind: result.kind ?? 'participant',
+          event_id: event.id,
+          participant_id: result.participant_id,
+          participant_name: result.participant_name,
+          team_id: result.team_id,
+          name: result.name,
+          account_id: result.account_id ?? '',
+          balance: result.balance ?? 0,
+        })
+        return
+      }
+      setOutcome(result)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not resolve QR code')
+      setError(err instanceof Error ? err.message : 'Scan failed')
+    } finally {
+      setBusy(false)
+      setManual('')
     }
   }
 
-  // the tab is hidden for non-staff; this also covers arriving by URL
-  if (!isStaff) {
+  // staff and judges may scan; perform_scan re-authorizes per configuration.
+  // (Self-service participant scanning is authorized server-side when a
+  // configuration allows it — a participant-facing scan surface is future UI
+  // work, not a security gap.)
+  if (!isStaff && !isJudge) {
     return (
       <div className="page">
-        <p className="form-error">Only event staff can run a scan station.</p>
+        <p className="form-error">Only event staff and judges can run a scan station.</p>
       </div>
     )
   }
 
+  const noOperations = configs !== null && configs.length === 0
+    && (!isStaff || !event.capabilities.points)
+
   return (
     <div className="page page-narrow">
       <h2>Scan station</h2>
-      {!target && (
+
+      {configs !== null && (configs.length > 0 || (isStaff && event.capabilities.points)) && (
         <div className="card stack">
-          {scanning
-            ? (
-              <Suspense fallback={<p className="muted">Starting camera…</p>}>
-                <Scanner onScan={(token) => void lookup(token)} />
-              </Suspense>
-            )
-            : <button className="btn btn-ghost" onClick={() => setScanning(true)}>Restart camera</button>}
+          <label>
+            QR operation
+            <select value={opId} onChange={(e) => selectOp(e.target.value)}>
+              {configs.map((c) => (
+                <option key={c.id} value={c.id}>{c.label}</option>
+              ))}
+              {isStaff && event.capabilities.points && (
+                <option value={LEGACY_ID}>Scoring station{configs.length > 0 ? ' (general)' : ''}</option>
+              )}
+            </select>
+          </label>
+          {current && (
+            <>
+              {current.description && <p className="muted">{current.description}</p>}
+              {current.actions.length > 1 && (
+                <label>
+                  Action
+                  <select value={action} onChange={(e) => setAction(e.target.value as QrAction)}>
+                    {current.actions.map((a) => (
+                      <option key={a} value={a}>{ACTION_LABELS[a]}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {current.actions.length === 1 && (
+                <p className="muted">Action: {ACTION_LABELS[current.actions[0]]}</p>
+              )}
+            </>
+          )}
+          {isAttendanceOp && attended !== null && (
+            <p className="muted">{attended} checked in so far.</p>
+          )}
+        </div>
+      )}
+
+      {noOperations && (
+        <div className="card">
+          <p className="muted">
+            {isStaff
+              ? 'No QR operations are configured for this event yet. An Event Manager can add them in Event settings → QR operations.'
+              : 'No QR operations are configured for judges yet. Ask the Event Manager to grant Judges access to a QR operation.'}
+          </p>
+        </div>
+      )}
+
+      {!scoringTarget && !judgeTarget && !noOperations && (
+        <div className="card stack">
+          <Suspense fallback={<p className="muted">Loading scanner…</p>}>
+            <Scanner onScan={(token) => void handleToken(token)} />
+          </Suspense>
           <form
             className="row"
             onSubmit={(e: FormEvent) => {
               e.preventDefault()
-              void lookup(manual)
+              void handleToken(manual)
             }}
           >
-            <input placeholder="…or type a QR token (p_/t_…)" value={manual} onChange={(e) => setManual(e.target.value)} />
-            <button className="btn btn-ghost">Look up</button>
+            <input
+              placeholder="…or enter a code manually"
+              value={manual}
+              onChange={(e) => setManual(e.target.value)}
+            />
+            <button className="btn btn-ghost" disabled={busy}>Look up</button>
           </form>
-          {error && <p className="form-error">{error}</p>}
+
+          {outcome && <ScanResult outcome={outcome} onNext={() => setOutcome(null)} />}
+          {error && (
+            <div className="scan-flash scan-flash-error" role="alert">
+              <AlertTriangle size={18} aria-hidden />
+              <span>{error}</span>
+            </div>
+          )}
         </div>
       )}
-      {target && (
+
+      {scoringTarget && (
         <AwardPanel
-          target={target}
+          target={scoringTarget}
           activities={activities}
           onDone={() => {
-            setTarget(null)
-            setScanning(true)
+            setScoringTarget(null)
+            setOutcome(null)
           }}
-          onRefresh={(token) => void lookup(token)}
         />
       )}
+
+      {judgeTarget && (
+        <JudgeEvalPanel
+          eventId={event.id}
+          target={judgeTarget}
+          onDone={() => setJudgeTarget(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+// Judge scanned a team/participant QR with the scoring action: resolve their
+// SUBMITTED entry and open the standard evaluation editor (criteria +
+// notes + finalize — save_evaluation authorizes and validates server-side).
+function JudgeEvalPanel({ eventId, target, onDone }: {
+  eventId: string
+  target: { teamId: string | null; participantId: string | null; name: string }
+  onDone: () => void
+}) {
+  const [submission, setSubmission] = useState<Submission | null>(null)
+  const [criteria, setCriteria] = useState<JudgingCriterion[]>([])
+  const [existing, setExisting] = useState<JudgeEvaluation | null>(null)
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    async function load() {
+      let q = supabase.from('submissions').select('*').eq('event_id', eventId).eq('status', 'submitted')
+      q = target.teamId ? q.eq('team_id', target.teamId) : q.eq('participant_id', target.participantId ?? '')
+      const [{ data: sub }, cs, mine] = await Promise.all([
+        q.maybeSingle(),
+        listCriteria(eventId).catch(() => [] as JudgingCriterion[]),
+        listMyEvaluations(eventId).catch(() => [] as JudgeEvaluation[]),
+      ])
+      if (!alive) return
+      const found = (sub ?? null) as Submission | null
+      setSubmission(found)
+      setCriteria(cs.filter((c) => c.is_enabled))
+      setExisting(found ? mine.find((e) => e.submission_id === found.id) ?? null : null)
+      setLoaded(true)
+    }
+    void load()
+    return () => { alive = false }
+  }, [eventId, target])
+
+  return (
+    <div className="card stack">
+      <div className="scan-target">
+        <div>
+          <h3>{target.name}</h3>
+          <p className="muted">{target.teamId ? 'Team' : 'Participant'} · judging</p>
+        </div>
+      </div>
+      {!loaded && <p className="muted">Loading entry…</p>}
+      {loaded && !submission && (
+        <p className="muted">
+          No submitted entry for {target.name} yet — evaluations open once they
+          hand in their submission.
+        </p>
+      )}
+      {loaded && submission && (
+        <EvaluationEditor
+          submissionId={submission.id}
+          criteria={criteria}
+          existing={existing}
+          onSaved={onDone}
+        />
+      )}
+      <button className="btn btn-ghost" onClick={onDone}>Scan next</button>
+    </div>
+  )
+}
+
+// clear, human outcome states: what was scanned, what happened, duplicate info
+function ScanResult({ outcome, onNext }: { outcome: ScanOutcome; onNext: () => void }) {
+  if (outcome.status === 'duplicate') {
+    return (
+      <div className="scan-flash scan-flash-warn" role="status">
+        <AlertTriangle size={18} aria-hidden />
+        <span>
+          <strong>Already checked in</strong> — {outcome.name} was marked present
+          {outcome.recorded_at ? ` at ${fmtDateTime(outcome.recorded_at)}` : ''}.
+        </span>
+      </div>
+    )
+  }
+  return (
+    <div className="scan-flash scan-flash-ok" role="status">
+      <CheckCircle2 size={18} aria-hidden />
+      <span>
+        {outcome.action === 'attendance' && <><strong>Attendance recorded</strong> — {outcome.name}</>}
+        {outcome.action === 'verification' && (
+          <><strong>{outcome.kind === 'team' ? 'Team verified' : 'Verified'}</strong> — {outcome.name}</>
+        )}
+        {outcome.action !== 'attendance' && outcome.action !== 'verification' && (
+          <><strong>Done</strong> — {outcome.name}</>
+        )}
+      </span>
+      <button type="button" className="btn btn-ghost btn-sm" onClick={onNext}>Scan next</button>
     </div>
   )
 }
@@ -93,7 +359,6 @@ function AwardPanel({ target, activities, onDone }: {
   target: QrResolution
   activities: Activity[]
   onDone: () => void
-  onRefresh: (token: string) => void
 }) {
   const { event } = useEvent()
   const [amount, setAmount] = useState('')
@@ -151,7 +416,7 @@ function AwardPanel({ target, activities, onDone }: {
       </div>
 
       <label>
-        Activity (optional)
+        Task (optional)
         <select value={activityId} onChange={(e) => setActivityId(e.target.value)}>
           <option value="">— none —</option>
           {activities.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
@@ -185,9 +450,7 @@ function AwardPanel({ target, activities, onDone }: {
           {activity.config.entry_fee != null && Number(activity.config.entry_fee) > 0 && (
             <button
               className="btn btn-ghost btn-sm" disabled={busy}
-              onClick={() => {
-                setAmount(String(Math.abs(Number(activity.config.entry_fee))))
-              }}
+              onClick={() => setAmount(String(Math.abs(Number(activity.config.entry_fee))))}
             >
               Use entry fee amount
             </button>

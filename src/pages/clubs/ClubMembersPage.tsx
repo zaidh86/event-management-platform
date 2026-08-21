@@ -3,6 +3,7 @@ import {
   addClubMemberByEmail, listClubMembers, removeClubMember, updateClubMemberRole,
 } from '../../lib/api'
 import { useAuth } from '../../contexts/AuthContext'
+import { ConfirmDialog } from '../../components/ui/Dialog'
 import { CLUB_ROLE_OPTIONS, clubRoleName } from '../../lib/roles'
 import { useClub } from './ClubLayout'
 import type { ClubMember, ClubRole, Profile } from '../../lib/types'
@@ -15,6 +16,8 @@ export function ClubMembersPage() {
   const [role, setRole] = useState<ClubRole>('member')
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [toRemove, setToRemove] = useState<(ClubMember & { profile: Profile }) | null>(null)
+  const [removing, setRemoving] = useState(false)
 
   const load = useCallback(() => {
     listClubMembers(club.id).then(setMembers).catch((e: Error) => setError(e.message))
@@ -56,7 +59,7 @@ export function ClubMembersPage() {
       {error && <p className="form-error">{error}</p>}
       {notice && <p className="form-notice">{notice}</p>}
 
-      <div className="card">
+      <div className="card table-scroll">
         <table className="table">
           <thead>
             <tr><th>Name</th><th>Email</th><th>Role</th>{canManage && <th />}</tr>
@@ -86,14 +89,7 @@ export function ClubMembersPage() {
                 {canManage && (
                   <td>
                     {m.user_id !== session?.user.id && (
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => {
-                          if (confirm(`Remove ${m.profile?.email} from ${club.name}?`)) {
-                            void removeClubMember(m.id).then(load).catch((err: Error) => setError(err.message))
-                          }
-                        }}
-                      >
+                      <button className="btn btn-ghost btn-sm" onClick={() => setToRemove(m)}>
                         Remove
                       </button>
                     )}
@@ -105,6 +101,25 @@ export function ClubMembersPage() {
         </table>
         {members.length === 0 && <p className="muted">No members yet.</p>}
       </div>
+
+      <ConfirmDialog
+        open={toRemove !== null}
+        title={`Remove ${toRemove?.profile?.email} from ${club.name}?`}
+        confirmLabel="Remove member"
+        danger
+        busy={removing}
+        onConfirm={() => {
+          if (!toRemove) return
+          setRemoving(true)
+          void removeClubMember(toRemove.id)
+            .then(() => { setToRemove(null); load() })
+            .catch((err: Error) => setError(err.message))
+            .finally(() => setRemoving(false))
+        }}
+        onCancel={() => setToRemove(null)}
+      >
+        <p className="muted">They lose their club role. Event registrations they already made are unaffected.</p>
+      </ConfirmDialog>
     </div>
   )
 }

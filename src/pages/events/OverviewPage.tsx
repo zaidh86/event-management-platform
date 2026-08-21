@@ -2,11 +2,12 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { listAnnouncements, postAnnouncement } from '../../lib/api'
 import { supabase } from '../../lib/supabase'
 import { fmtDateTime } from '../../lib/format'
+import { LifecyclePanel } from '../../components/LifecyclePanel'
 import { useEvent } from './EventLayout'
 import type { Announcement } from '../../lib/types'
 
 export function OverviewPage() {
-  const { event, isOrganizer, role } = useEvent()
+  const { event, isOrganizer, role, canManageEvent } = useEvent()
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
@@ -44,6 +45,7 @@ export function OverviewPage() {
     <div className="page">
       {event.banner_url && <img src={event.banner_url} alt="" className="event-banner" />}
       <p className="event-description">{event.description}</p>
+      {canManageEvent && <LifecyclePanel />}
       <div className="overview-grid">
         <section className="card">
           <h2>Event info</h2>
@@ -52,7 +54,7 @@ export function OverviewPage() {
             <dd>{event.is_team_event ? `Teams of ${event.team_size_min}–${event.team_size_max}` : 'Individual'}</dd>
             {event.capabilities.points && (
               <>
-                <dt>Currency</dt>
+                <dt>Scoring unit</dt>
                 <dd className="currency-cell">
                   <img
                     src={event.currency_image_url ?? '/currency-default.svg'}
@@ -63,7 +65,15 @@ export function OverviewPage() {
                 <dt>Starting balance</dt>
                 <dd>{event.starting_balance.toLocaleString()}</dd>
                 <dt>Leaderboard</dt>
-                <dd>{event.public_leaderboard ? 'Public' : 'Members only'}</dd>
+                <dd>
+                  {!event.leaderboard_config.enabled
+                    ? 'Off'
+                    : event.leaderboard_config.visibility === 'public'
+                      ? 'Public'
+                      : event.leaderboard_config.visibility === 'hidden'
+                        ? 'Staff only'
+                        : 'Participants'}
+                </dd>
               </>
             )}
           </dl>

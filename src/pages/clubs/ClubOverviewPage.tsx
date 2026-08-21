@@ -17,7 +17,8 @@ export function ClubOverviewPage() {
   return (
     <div className="page">
       {club.banner_url && <img src={club.banner_url} alt="" className="event-banner" />}
-      {club.description && <p className="event-description">{club.description}</p>}
+      {/* the description lives in the club header (ClubLayout) — no separate
+          Description card here (Informatique Exhib pass, issue 12) */}
       <div className="page-head">
         <h2>Recent events</h2>
         <Link to="events" className="btn btn-ghost btn-sm">All events</Link>

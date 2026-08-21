@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { ThemeProvider } from './contexts/ThemeContext'
+import { ToastProvider } from './components/ui/Toast'
 
 // Preconnect to the Supabase origin so the first session/auth request skips
 // DNS + TLS setup. The URL only exists at runtime (env), hence not in index.html.
@@ -22,7 +23,9 @@ try {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ThemeProvider>
-      <App />
+      <ToastProvider>
+        <App />
+      </ToastProvider>
     </ThemeProvider>
   </StrictMode>,
 )

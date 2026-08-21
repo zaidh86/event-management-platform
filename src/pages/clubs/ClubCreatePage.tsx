@@ -8,6 +8,7 @@ import { useAuth } from '../../contexts/AuthContext'
 export function ClubCreatePage() {
   const { isSuperAdmin } = useAuth()
   const [name, setName] = useState('')
+  const [department, setDepartment] = useState('')
   const [description, setDescription] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -22,7 +23,7 @@ export function ClubCreatePage() {
     setBusy(true)
     setError(null)
     try {
-      const club = await createClub({ name, description })
+      const club = await createClub({ name, department, description })
       navigate(`/clubs/${club.id}/settings`)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create club')
@@ -41,6 +42,13 @@ export function ClubCreatePage() {
         <label>
           Club name
           <input value={name} onChange={(e) => setName(e.target.value)} required placeholder="e.g. Data Science Club" />
+        </label>
+        <label>
+          Department
+          <input
+            value={department} onChange={(e) => setDepartment(e.target.value)}
+            placeholder="e.g. Department of Computer Science"
+          />
         </label>
         <label>
           Description
