@@ -2,14 +2,15 @@ import { Suspense, useCallback, useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useOutletContext, useParams } from 'react-router-dom'
 import { getClub, listMyClubMemberships } from '../../lib/api'
 import { useAuth } from '../../contexts/AuthContext'
-import { clubRoleLabel, platformRoleLabel } from '../../lib/roles'
+import { clubRoleLabel, isClubAuthority, platformRoleLabel } from '../../lib/roles'
 import type { Club, ClubRole } from '../../lib/types'
 
 export interface ClubContext {
   club: Club
   myClubRole: ClubRole | null
-  // club_admin of this club, or platform admin (super admin / platform owner via
-  // isSuperAdmin — no club_members row needed, mirroring is_club_admin() in SQL)
+  // holds club authority here — club_admin or convener (isClubAuthority) — or is
+  // a platform admin (super admin / platform owner via isSuperAdmin, no
+  // club_members row needed). Mirrors is_club_admin() in SQL exactly.
   canManage: boolean
   refresh: () => Promise<void>
 }
@@ -65,7 +66,7 @@ export function ClubLayout() {
   }
   if (!loaded || !club) return <div className="page-loading">Loading club…</div>
 
-  const canManage = isSuperAdmin || myClubRole === 'club_admin'
+  const canManage = isSuperAdmin || isClubAuthority(myClubRole)
   const isMember = canManage || myClubRole !== null
   const ctx: ClubContext = { club, myClubRole, canManage, refresh }
 
@@ -78,7 +79,10 @@ export function ClubLayout() {
           <h1>{club.name}</h1>
           {club.department && <p className="club-dept">{club.department}</p>}
           {clubRoleLabel(myClubRole) && <span className="badge">{clubRoleLabel(myClubRole)}</span>}
-          {isSuperAdmin && !clubRoleLabel(myClubRole) && (
+          {/* a platform admin holding a POWERLESS club role (faculty/member)
+              still shows their platform standing — the club badge would
+              otherwise imply their authority here comes from the club */}
+          {isSuperAdmin && !isClubAuthority(myClubRole) && (
             <span className="badge badge-admin">{platformRoleLabel(profile?.role)}</span>
           )}
           {club.description && <p className="club-blurb">{club.description}</p>}

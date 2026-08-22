@@ -1,7 +1,12 @@
 // Domain types mirroring the database rows (supabase/migrations/00001_init.sql).
 
 export type GlobalRole = 'user' | 'super_admin' | 'platform_owner'
-export type ClubRole = 'club_admin' | 'member'
+// Club standing. club_admin and convener both carry FULL club authority —
+// convener is the faculty-held form of it (a teacher who runs the club).
+// faculty is a teacher ASSOCIATED with the club and carries none: it sits
+// beside 'member', not above it. Authority is decided in exactly one place —
+// isClubAuthority() in lib/roles.ts, mirroring is_club_admin() in SQL.
+export type ClubRole = 'club_admin' | 'convener' | 'faculty' | 'member'
 export type EventRole = 'organizer' | 'activity_admin' | 'volunteer' | 'participant' | 'judge'
 export type EventStatus = 'draft' | 'active' | 'ended' | 'archived'
 export type ActivityKind = 'configured' | 'integrated'
@@ -369,13 +374,46 @@ export interface FeedbackForm {
   updated_at: string
 }
 
+// Who a response came from, stamped server-side at submission time (00021).
+// 'faculty' covers both faculty and convener club standing in the EVENT'S OWN
+// club; 'anonymous' is an unattributable respondent, which is NOT the same
+// claim as 'regular'. Absent/null on rows recorded before 00021 — those are
+// genuinely unclassified and must never be presented as either category.
+export type FeedbackRespondentCategory = 'faculty' | 'regular' | 'anonymous'
+
 export interface FeedbackResponse {
   id: string
   form_id: string
   event_id: string
   respondent_id: string | null
+  // what this response is ABOUT (00019); absent on pre-00019 rows
+  target_type?: 'event' | 'team' | 'participant'
+  target_id?: string | null
+  // absent on pre-00021 rows — see FeedbackRespondentCategory
+  respondent_category?: FeedbackRespondentCategory | null
   answers: Record<string, unknown>
   created_at: string
+}
+
+// ---- participant removal (00021) --------------------------------------------
+
+// What remove_event_participant() returns. 'blocked' is a refusal the organizer
+// can act on, not an error: override_allowed distinguishes "confirm and it will
+// proceed" from "this can never proceed until you delete the submission".
+export interface ParticipantRemovalResult {
+  status: 'ok' | 'blocked'
+  display_name: string
+  // status = 'blocked'
+  override_allowed?: boolean
+  reasons?: string[]
+  hint?: string
+  // status = 'ok'
+  account_deleted?: boolean
+  transactions_deleted?: number
+  certificates_deleted?: number
+  attendance_deleted?: boolean
+  team_id?: string | null
+  team_now_empty?: boolean
 }
 
 // ---- certificates (ADR-0012) -------------------------------------------------

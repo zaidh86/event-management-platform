@@ -4,20 +4,27 @@ import {
 } from '../../lib/api'
 import { useAuth } from '../../contexts/AuthContext'
 import { ConfirmDialog } from '../../components/ui/Dialog'
-import { CLUB_ROLE_OPTIONS, clubRoleName } from '../../lib/roles'
+import { CLUB_ROLE_OPTIONS, clubRoleName, isClubAuthority, isFacultyRole } from '../../lib/roles'
 import { useClub } from './ClubLayout'
 import type { ClubMember, ClubRole, Profile } from '../../lib/types'
+
+type Row = ClubMember & { profile: Profile }
 
 export function ClubMembersPage() {
   const { club, canManage } = useClub()
   const { session } = useAuth()
-  const [members, setMembers] = useState<(ClubMember & { profile: Profile })[]>([])
+  const [members, setMembers] = useState<Row[]>([])
   const [email, setEmail] = useState('')
   const [role, setRole] = useState<ClubRole>('member')
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  const [toRemove, setToRemove] = useState<(ClubMember & { profile: Profile }) | null>(null)
+  const [toRemove, setToRemove] = useState<Row | null>(null)
   const [removing, setRemoving] = useState(false)
+  // a role change that gains or loses club authority is confirmed first —
+  // "Convener → Faculty" reads like a sideways move between two teacher roles
+  // but is a full demotion, and the roster should not hide that
+  const [toChange, setToChange] = useState<{ member: Row; next: ClubRole } | null>(null)
+  const [changing, setChanging] = useState(false)
 
   const load = useCallback(() => {
     listClubMembers(club.id).then(setMembers).catch((e: Error) => setError(e.message))
@@ -38,6 +45,26 @@ export function ClubMembersPage() {
     }
   }
 
+  function applyRoleChange(memberId: string, next: ClubRole) {
+    setChanging(true)
+    setError(null)
+    void updateClubMemberRole(memberId, next)
+      .then(() => { setToChange(null); load() })
+      .catch((err: Error) => { setError(err.message); setToChange(null) })
+      .finally(() => setChanging(false))
+  }
+
+  // Only a change that crosses the authority line needs confirming; Faculty →
+  // Member (or Convener → Club Admin) changes the label, not what they can do.
+  function onSelectRole(member: Row, next: ClubRole) {
+    if (next === member.role) return
+    if (isClubAuthority(member.role) === isClubAuthority(next)) {
+      applyRoleChange(member.id, next)
+      return
+    }
+    setToChange({ member, next })
+  }
+
   return (
     <div className="page">
       <h2>Members</h2>
@@ -50,11 +77,21 @@ export function ClubMembersPage() {
           <label>
             Role
             <select value={role} onChange={(e) => setRole(e.target.value as ClubRole)}>
-              {CLUB_ROLE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              {CLUB_ROLE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label} — {o.hint}</option>
+              ))}
             </select>
           </label>
           <button className="btn btn-primary">Add</button>
         </form>
+      )}
+      {canManage && (
+        <p className="muted">
+          <strong>Convener</strong> and <strong>Faculty</strong> are both teacher
+          roles. A Convener runs the club and has the same full authority as a
+          Club Admin; a Faculty member is associated with the club and has no
+          club authority at all.
+        </p>
       )}
       {error && <p className="form-error">{error}</p>}
       {notice && <p className="form-notice">{notice}</p>}
@@ -67,20 +104,22 @@ export function ClubMembersPage() {
           <tbody>
             {members.map((m) => (
               <tr key={m.id}>
-                <td>{m.profile?.full_name || '—'}</td>
+                <td>
+                  {m.profile?.full_name || '—'}
+                  {isFacultyRole(m.role) && <span className="badge badge-faculty">Faculty</span>}
+                </td>
                 <td>{m.profile?.email}</td>
                 <td>
                   {canManage ? (
                     <select
                       value={m.role}
                       disabled={m.user_id === session?.user.id}
-                      onChange={(e) => {
-                        // promote member → club_admin, or demote club_admin → member
-                        void updateClubMemberRole(m.id, e.target.value as ClubRole)
-                          .then(load).catch((err: Error) => setError(err.message))
-                      }}
+                      aria-label={`Role for ${m.profile?.email ?? 'member'}`}
+                      onChange={(e) => onSelectRole(m, e.target.value as ClubRole)}
                     >
-                      {CLUB_ROLE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      {CLUB_ROLE_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
                     </select>
                   ) : (
                     clubRoleName(m.role)
@@ -101,6 +140,29 @@ export function ClubMembersPage() {
         </table>
         {members.length === 0 && <p className="muted">No members yet.</p>}
       </div>
+
+      <ConfirmDialog
+        open={toChange !== null}
+        title={
+          toChange && isClubAuthority(toChange.next)
+            ? `Give ${toChange.member.profile?.email} full authority over ${club.name}?`
+            : `Remove ${toChange?.member.profile?.email}'s authority over ${club.name}?`
+        }
+        confirmLabel={toChange && isClubAuthority(toChange.next) ? 'Grant authority' : 'Remove authority'}
+        danger={toChange !== null && !isClubAuthority(toChange.next)}
+        busy={changing}
+        onConfirm={() => toChange && applyRoleChange(toChange.member.id, toChange.next)}
+        onCancel={() => setToChange(null)}
+      >
+        {toChange && (
+          <p className="muted">
+            {clubRoleName(toChange.member.role)} → <strong>{clubRoleName(toChange.next)}</strong>.
+            {isClubAuthority(toChange.next)
+              ? ' They will be able to edit the club, manage its members, and create, edit and delete its events.'
+              : ' They stay in the club but can no longer edit it, manage members, or manage its events.'}
+          </p>
+        )}
+      </ConfirmDialog>
 
       <ConfirmDialog
         open={toRemove !== null}

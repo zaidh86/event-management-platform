@@ -3,7 +3,7 @@ import { Link, NavLink, Outlet, useOutletContext, useParams } from 'react-router
 import { getClub, getEvent, getMyMembership, getMyParticipant, listMyClubMemberships } from '../../lib/api'
 import { useAuth } from '../../contexts/AuthContext'
 import { normalizeLeaderboardConfig } from '../../lib/leaderboard'
-import { clubRoleLabel, eventRoleLabel, platformRoleLabel } from '../../lib/roles'
+import { clubRoleLabel, eventRoleLabel, isClubAuthority, platformRoleLabel } from '../../lib/roles'
 import type { Club, ClubRole, EmpEvent, EventRole, Participant } from '../../lib/types'
 
 export interface EventContext {
@@ -80,7 +80,7 @@ export function EventLayout() {
 
   const isOrganizer = role === 'organizer' || isSuperAdmin
   const isStaff = isOrganizer || role === 'activity_admin' || role === 'volunteer'
-  const isClubAdmin = isSuperAdmin || myClubRole === 'club_admin'
+  const isClubAdmin = isSuperAdmin || isClubAuthority(myClubRole)
   const canManageEvent = isOrganizer || isClubAdmin
   const caps = event.capabilities
   // event.leaderboard_config is already normalized at the api boundary; the

@@ -1,12 +1,14 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import {
-  addMemberByEmail, listMembers, listParticipants, listTeams, removeMember,
-  updateMemberRole,
+  addMemberByEmail, listMembers, listParticipants, listTeams, removeEventParticipant,
+  removeMember, updateMemberRole,
 } from '../../lib/api'
 import { useAuth } from '../../contexts/AuthContext'
 import { ConfirmDialog } from '../../components/ui/Dialog'
 import { useEvent } from './EventLayout'
-import type { EventMember, EventRole, Participant, Profile, Team } from '../../lib/types'
+import type {
+  EventMember, EventRole, Participant, ParticipantRemovalResult, Profile, Team,
+} from '../../lib/types'
 
 const ROLES: EventRole[] = ['organizer', 'activity_admin', 'volunteer', 'judge', 'participant']
 
@@ -22,6 +24,19 @@ export function MembersPage() {
   const [notice, setNotice] = useState<string | null>(null)
   const [toRemove, setToRemove] = useState<(EventMember & { profile: Profile }) | null>(null)
   const [removing, setRemoving] = useState(false)
+
+  // participant removal is a two-step conversation with the server: the first
+  // call reports what removal would destroy, and only an explicit second call
+  // carrying a reason goes through. Nothing is decided here — the RPC re-checks
+  // authority and re-evaluates every refusal on the forced call too.
+  const [toUnregister, setToUnregister] = useState<Participant | null>(null)
+  const [block, setBlock] = useState<ParticipantRemovalResult | null>(null)
+  const [reason, setReason] = useState('')
+  const [unregistering, setUnregistering] = useState(false)
+  // which participant the dialog is currently about, readable from inside an
+  // async handler: a result that lands after the dialog moved on must not be
+  // applied to whoever is on screen now
+  const openFor = useRef<string | null>(null)
 
   function load() {
     listMembers(event.id).then(setMembers).catch((e: Error) => setError(e.message))
@@ -44,6 +59,62 @@ export function MembersPage() {
     }
   }
 
+  function openUnregister(p: Participant) {
+    openFor.current = p.id
+    setToUnregister(p)
+    setBlock(null)
+    setReason('')
+    setError(null)
+    setNotice(null)
+  }
+
+  function closeUnregister() {
+    openFor.current = null
+    setToUnregister(null)
+    setBlock(null)
+    setReason('')
+  }
+
+  async function confirmUnregister() {
+    const target = toUnregister
+    if (!target) return
+    // a hard refusal has no second step — acknowledging it just closes
+    if (block && !block.override_allowed) {
+      closeUnregister()
+      return
+    }
+    const forcing = block?.override_allowed === true
+    setUnregistering(true)
+    setError(null)
+    try {
+      const result = await removeEventParticipant(target.id, reason.trim(), forcing)
+      // the dialog moved on while this was in flight: the write still happened,
+      // so refresh, but do not narrate it over a different participant
+      if (openFor.current !== target.id) {
+        load()
+        return
+      }
+      if (result.status === 'blocked') {
+        setBlock(result)
+        return
+      }
+      const extras: string[] = []
+      if (result.certificates_deleted) extras.push(`${result.certificates_deleted} certificate(s) revoked`)
+      if (result.transactions_deleted) extras.push(`${result.transactions_deleted} ledger entrie(s) deleted`)
+      if (result.team_now_empty) extras.push('their team now has no members')
+      setNotice(
+        `${result.display_name} was removed from this event${extras.length ? ` — ${extras.join(', ')}` : ''}.`,
+      )
+      closeUnregister()
+      load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to remove participant')
+      closeUnregister()
+    } finally {
+      setUnregistering(false)
+    }
+  }
+
   // the tab is hidden for non-organizers; this also covers arriving by URL
   if (!isOrganizer) {
     return (
@@ -52,6 +123,8 @@ export function MembersPage() {
       </div>
     )
   }
+
+  const forcing = block?.override_allowed === true
 
   return (
     <div className="page">
@@ -110,7 +183,7 @@ export function MembersPage() {
       <div className="card table-scroll">
         <table className="table">
           <thead>
-            <tr><th>Participant</th><th>Registered as</th><th>Registered</th></tr>
+            <tr><th>Participant</th><th>Registered as</th><th>Registered</th><th /></tr>
           </thead>
           <tbody>
             {participants.map((p) => {
@@ -125,12 +198,77 @@ export function MembersPage() {
                       : 'Solo'}
                   </td>
                   <td className="muted">{new Date(p.created_at).toLocaleDateString()}</td>
+                  <td>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => openUnregister(p)}
+                      title="Remove this registration from this event"
+                    >
+                      Remove from event
+                    </button>
+                  </td>
                 </tr>
               )
             })}
           </tbody>
         </table>
+        {participants.length === 0 && <p className="muted">Nobody has registered yet.</p>}
       </div>
+
+      <ConfirmDialog
+        open={toUnregister !== null}
+        title={`Remove ${toUnregister?.display_name ?? ''} from ${event.name}?`}
+        confirmLabel={
+          block && !block.override_allowed ? 'Close'
+            : forcing ? 'Remove anyway'
+              : 'Remove from event'
+        }
+        cancelLabel={block && !block.override_allowed ? 'Back' : 'Cancel'}
+        danger
+        busy={unregistering}
+        confirmDisabled={forcing && reason.trim() === ''}
+        onConfirm={() => void confirmUnregister()}
+        onCancel={closeUnregister}
+      >
+        {!block && (
+          <>
+            <p className="muted">
+              This removes their registration from <strong>this event only</strong> —
+              their check-in and, for a solo participant, their points account go
+              with it.
+            </p>
+            <p className="muted">
+              It does <strong>not</strong> delete their EMP account, their club
+              membership, or their registrations in any other event. They can
+              register again while the event is active.
+            </p>
+          </>
+        )}
+        {block && (
+          <>
+            <p className={block.override_allowed ? 'form-notice' : 'form-error'}>
+              {block.override_allowed
+                ? 'Removing them would also destroy:'
+                : 'This participant cannot be removed:'}
+            </p>
+            <ul className="muted">
+              {(block.reasons ?? []).map((r) => <li key={r}>{r}</li>)}
+            </ul>
+            {block.hint && <p className="muted">{block.hint}</p>}
+            {block.override_allowed && (
+              <label>
+                Reason (recorded in the removal log, required)
+                <input
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  maxLength={300}
+                  placeholder="e.g. duplicate registration"
+                />
+              </label>
+            )}
+          </>
+        )}
+      </ConfirmDialog>
 
       <ConfirmDialog
         open={toRemove !== null}

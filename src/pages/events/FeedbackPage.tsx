@@ -421,8 +421,32 @@ function FormEditor({ eventId, kind, form, onDone, onCancel }: {
 
 // ---- responses ---------------------------------------------------------------
 
+// Audience segregation (00021). The bucket comes from the STORED
+// respondent_category, stamped server-side against the event's own club at
+// submission time — never re-derived here, so a later role change cannot
+// retroactively relabel old feedback.
+//
+// 'other' deliberately holds two different unknowns: anonymous respondents
+// (unattributable by design) and rows recorded before 00021 existed (null).
+// Neither is evidence of "not faculty", so neither is folded into Regular.
+type Audience = 'all' | 'faculty' | 'regular' | 'other'
+
+const AUDIENCES: { value: Audience; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'faculty', label: 'Faculty' },
+  { value: 'regular', label: 'Regular' },
+  { value: 'other', label: 'Other' },
+]
+
+function audienceOf(r: FeedbackResponse): Exclude<Audience, 'all'> {
+  if (r.respondent_category === 'faculty') return 'faculty'
+  if (r.respondent_category === 'regular') return 'regular'
+  return 'other'
+}
+
 function ResponsesViewer({ form }: { form: FeedbackForm }) {
   const [responses, setResponses] = useState<FeedbackResponse[] | null>(null)
+  const [audience, setAudience] = useState<Audience>('all')
 
   useEffect(() => {
     listFeedbackResponses(form.id).then(setResponses).catch(() => setResponses([]))
@@ -431,28 +455,62 @@ function ResponsesViewer({ form }: { form: FeedbackForm }) {
   if (responses === null) return <Skeleton lines={2} height="2rem" />
   if (responses.length === 0) return <p className="muted">No responses yet.</p>
 
+  const counts = { all: responses.length, faculty: 0, regular: 0, other: 0 }
+  for (const r of responses) counts[audienceOf(r)] += 1
+  const shown = audience === 'all' ? responses : responses.filter((r) => audienceOf(r) === audience)
+
   return (
-    <div className="table-scroll">
-      <table className="responses-table">
-        <thead>
-          <tr>
-            <th>When</th>
-            <th>Respondent</th>
-            {form.questions.map((q) => <th key={q.key}>{q.label}</th>)}
-          </tr>
-        </thead>
-        <tbody>
-          {responses.map((r) => (
-            <tr key={r.id}>
-              <td>{new Date(r.created_at).toLocaleString()}</td>
-              <td>{r.respondent_id ? 'Signed-in' : 'Anonymous'}</td>
-              {form.questions.map((q) => (
-                <td key={q.key}>{formatAnswer(r.answers[q.key])}</td>
+    <div className="stack">
+      <div className="filter-chips print-hide" role="group" aria-label="Filter responses by audience">
+        {AUDIENCES.map((a) => (
+          <button
+            key={a.value}
+            type="button"
+            className="btn btn-ghost btn-sm"
+            aria-pressed={audience === a.value}
+            onClick={() => setAudience(a.value)}
+          >
+            {a.label} <span className="chip-count">{counts[a.value]}</span>
+          </button>
+        ))}
+      </div>
+      {counts.other > 0 && (
+        <p className="muted">
+          <strong>Other</strong> covers anonymous responses and responses recorded
+          before faculty segregation was added — neither can be classified.
+        </p>
+      )}
+      {shown.length === 0 ? (
+        <p className="muted">No responses in this group.</p>
+      ) : (
+        <div className="table-scroll">
+          <table className="responses-table">
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Respondent</th>
+                {form.questions.map((q) => <th key={q.key}>{q.label}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((r) => (
+                <tr key={r.id}>
+                  <td>{new Date(r.created_at).toLocaleString()}</td>
+                  <td>
+                    {r.respondent_id ? 'Signed-in' : 'Anonymous'}
+                    {r.respondent_category === 'faculty' && (
+                      <span className="badge badge-faculty">Faculty</span>
+                    )}
+                  </td>
+                  {form.questions.map((q) => (
+                    <td key={q.key}>{formatAnswer(r.answers[q.key])}</td>
+                  ))}
+                </tr>
               ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }

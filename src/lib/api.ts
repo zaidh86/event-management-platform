@@ -6,7 +6,8 @@ import { normalizeSubmissionConfig } from './submissions'
 import type {
   Activity, Announcement, AttendanceRecord, Club, ClubMember, ClubRole, EmpEvent,
   EventMember, FeedbackForm, FeedbackResponse, JudgeEvaluation, JudgingCriterion,
-  JudgingResult, LeaderboardRow, Participant, ParticipationMode, Profile,
+  JudgingResult, LeaderboardRow, Participant, ParticipantRemovalResult,
+  ParticipationMode, Profile,
   PublicQrResolution, QrAction, QrConfig, QrResolution, ScanOutcome, ScanRecord,
   Submission, Team, Transaction, TransactionType, VerifiedCertificate,
 } from './types'
@@ -331,6 +332,22 @@ export async function listParticipants(eventId: string): Promise<Participant[]> 
     .from('participants').select('*').eq('event_id', eventId).order('created_at')
   throwIf(error)
   return (data ?? []) as Participant[]
+}
+
+// Removes a registration from ONE event — never the user's account, their club
+// membership, or their registrations elsewhere. Authorization, the refusal
+// rules and the cleanup all live in the RPC (00021 §2b); this is a thin call.
+//
+// A 'blocked' result is a normal outcome, not a thrown error: the caller shows
+// the reasons and, when override_allowed, re-calls with force plus a reason.
+export async function removeEventParticipant(
+  participantId: string, reason = '', force = false,
+): Promise<ParticipantRemovalResult> {
+  const { data, error } = await supabase.rpc('remove_event_participant', {
+    p_participant_id: participantId, p_reason: reason, p_force: force,
+  })
+  throwIf(error)
+  return data as ParticipantRemovalResult
 }
 
 export async function createTeam(eventId: string, name: string): Promise<Team> {

@@ -40,6 +40,10 @@
   --danger-bg: #782521;     /* deep red-leaning surface (destructive fills) */
   --danger-bg-hover: #8f2f2a;
   --danger-text: #f0b3ad;
+  /* faculty standing (00021): Solarized violet — a hue no status badge uses,
+     so "teacher" never reads as a lifecycle state */
+  --faculty: #8f93d4;       /* violet tint: pure #6c71c4 is ~3.5:1 on base03 */
+
   --rank-1: #b58900;        /* yellow  = 1st */
   --rank-2: #93a1a1;        /* base1   = 2nd */
   --rank-3: #cb4b16;        /* orange  = 3rd */
@@ -91,6 +95,8 @@
   --danger-bg: #f3dcd3;
   --danger-bg-hover: #ecc9bc;
   --danger-text: #a1231d;
+  --faculty: #4f53a0;       /* violet shade: pure violet is ~4.0:1 on base3 */
+
   --rank-1: #8f6c00;        /* yellow shade for text contrast on base3 */
   --rank-2: #657b83;        /* base00 = 2nd */
   --rank-3: #a63c10;        /* orange shade = 3rd */
@@ -194,6 +200,16 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 .badge-draft { color: var(--warn); border-color: var(--warn); }
 .badge-ended, .badge-archived { color: var(--text-muted); }
 .badge-admin { color: var(--accent-text); border-color: var(--accent-text); }
+.badge-faculty { color: var(--faculty); border-color: var(--faculty); }
+
+/* ---- filter chips (feedback audience) ----
+   Reuses .btn .btn-ghost .btn-sm; this only supplies the pressed state, so the
+   chips inherit every button behaviour (focus ring, hover, disabled). */
+.filter-chips { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
+.filter-chips .btn[aria-pressed='true'] {
+  border-color: var(--accent); color: var(--accent-text); background: var(--surface-2);
+}
+.filter-chips .chip-count { opacity: 0.7; font-variant-numeric: tabular-nums; }
 
 /* ---- auth ---- */
 .auth-card { max-width: 380px; margin: var(--s7) auto; display: flex; flex-direction: column; gap: var(--s4); }

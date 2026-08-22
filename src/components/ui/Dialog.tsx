@@ -10,6 +10,7 @@ export function ConfirmDialog({
   cancelLabel = 'Cancel',
   danger = false,
   busy = false,
+  confirmDisabled = false,
   onConfirm,
   onCancel,
 }: {
@@ -20,20 +21,41 @@ export function ConfirmDialog({
   cancelLabel?: string
   danger?: boolean
   busy?: boolean
+  // blocks confirming without claiming work is in progress — busy owns the
+  // "Working…" label, this only greys the button while input is incomplete
+  confirmDisabled?: boolean
   onConfirm: () => void
   onCancel: () => void
 }) {
   const confirmRef = useRef<HTMLButtonElement>(null)
 
+  // Callers pass inline arrows and locally-declared functions, so onCancel and
+  // busy get a fresh identity on every parent render. Reading them through refs
+  // keeps the effects below keyed on `open` alone — otherwise each keystroke
+  // typed into a field inside the dialog would re-run them and yank focus back
+  // to the confirm button.
+  const cancelRef = useRef(onCancel)
+  const busyRef = useRef(busy)
+  useEffect(() => {
+    cancelRef.current = onCancel
+    busyRef.current = busy
+  })
+
+  // focus the confirm button on the OPEN transition only
+  useEffect(() => {
+    if (open) confirmRef.current?.focus()
+  }, [open])
+
+  // Escape cancels — but never mid-request, matching the backdrop and buttons,
+  // so a dialog cannot be dismissed out from under an in-flight write
   useEffect(() => {
     if (!open) return
-    confirmRef.current?.focus()
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel()
+      if (e.key === 'Escape' && !busyRef.current) cancelRef.current()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [open, onCancel])
+  }, [open])
 
   if (!open) return null
 
@@ -57,7 +79,7 @@ export function ConfirmDialog({
             ref={confirmRef}
             className={danger ? 'btn btn-danger' : 'btn btn-primary'}
             onClick={onConfirm}
-            disabled={busy}
+            disabled={busy || confirmDisabled}
           >
             {busy ? 'Working…' : confirmLabel}
           </button>

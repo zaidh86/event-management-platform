@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { listClubs, listMyClubMemberships } from '../../lib/api'
 import { useAuth } from '../../contexts/AuthContext'
+import { isClubAuthority } from '../../lib/roles'
 import type { Club } from '../../lib/types'
 
 // Events belong to a club, so the legacy top-level create route no longer creates
@@ -16,7 +17,7 @@ export function EventCreateRedirect() {
     Promise.all([listClubs(), listMyClubMemberships(session.user.id)])
       .then(([all, memberships]) => {
         const adminOf = new Set(
-          memberships.filter((m) => m.role === 'club_admin').map((m) => m.club_id),
+          memberships.filter((m) => isClubAuthority(m.role)).map((m) => m.club_id),
         )
         // mirrors events_insert: a club you administer, or any club for platform admins
         setClubs(isSuperAdmin ? all : all.filter((c) => adminOf.has(c.id)))
