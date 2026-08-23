@@ -279,6 +279,17 @@ export interface TeamJoinRequest {
   updated_at: string
 }
 
+// what the participant join picker lists (00024): teams with ≥1 member and
+// room left — organizer surfaces keep reading the teams table directly
+export interface JoinableTeam {
+  id: string
+  event_id: string
+  name: string
+  member_count: number
+  team_size_max: number
+  created_at: string
+}
+
 export interface Participant {
   id: string
   event_id: string

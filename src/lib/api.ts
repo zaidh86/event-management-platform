@@ -10,7 +10,7 @@ import type {
   JudgingResult, LeaderboardRow, Participant, ParticipantRemovalResult,
   ParticipationMode, Profile,
   PublicQrResolution, QrAction, QrConfig, QrResolution, ScanOutcome, ScanRecord,
-  Submission, Team, TeamJoinRequest, Transaction, TransactionType, VerifiedCertificate,
+  JoinableTeam, Submission, Team, TeamJoinRequest, Transaction, TransactionType, VerifiedCertificate,
 } from './types'
 import type { Certificate, CertificateKind } from './types'
 
@@ -394,6 +394,18 @@ export async function withdrawTeamJoinRequest(requestId: string): Promise<TeamJo
   return data as TeamJoinRequest
 }
 
+// the participant join picker (00024): only teams with at least one member
+// and a free seat. Computed server-side because participants RLS hides other
+// teams' members from a teamless participant. Organizer/admin surfaces keep
+// using listTeams (every team, including emptied ones they may clean up).
+export async function listJoinableTeams(eventId: string): Promise<JoinableTeam[]> {
+  const { data, error } = await supabase.rpc('list_joinable_teams', { p_event_id: eventId })
+  throwIf(error)
+  return (data ?? []) as JoinableTeam[]
+}
+
+// every team of the event the caller may see (teams RLS) — organizer/admin
+// listings, certificates, table allocation
 export async function listTeams(eventId: string): Promise<Team[]> {
   const { data, error } = await supabase
     .from('teams').select('*').eq('event_id', eventId).order('name')

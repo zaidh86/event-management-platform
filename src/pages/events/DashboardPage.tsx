@@ -6,8 +6,8 @@ import { QRCodeSVG } from 'qrcode.react'
 import {
   createTeam, getAccountFor, getMyAttendance, getMyEventTable, getMySubmission,
   getSubmissionDocumentUrl, getTeam, listAccountTransactions,
-  listCertificates, listFeedbackForms, listQrConfigs, listTeamJoinRequests, listTeamMembers,
-  listTeams, registerForEvent, removeSubmissionDocument, requestTeamJoin,
+  listCertificates, listFeedbackForms, listJoinableTeams, listQrConfigs, listTeamJoinRequests,
+  listTeamMembers, registerForEvent, removeSubmissionDocument, requestTeamJoin,
   respondTeamJoinRequest, saveSubmission, uploadSubmissionDocument, withdrawTeamJoinRequest,
 } from '../../lib/api'
 import { supabase } from '../../lib/supabase'
@@ -20,8 +20,8 @@ import { Skeleton } from '../../components/ui/Skeleton'
 import { StatTile } from '../../components/ui/StatTile'
 import { useEvent } from './EventLayout'
 import type {
-  Account, AttendanceRecord, Certificate, EmpEvent, EventTable, FeedbackForm, Participant,
-  ParticipationMode, QrConfig, Submission, Team, TeamJoinRequest, Transaction,
+  Account, AttendanceRecord, Certificate, EmpEvent, EventTable, FeedbackForm, JoinableTeam,
+  Participant, ParticipationMode, QrConfig, Submission, Team, TeamJoinRequest, Transaction,
 } from '../../lib/types'
 
 export function DashboardPage() {
@@ -547,7 +547,9 @@ function TeamPicker({ eventId, participant, onDone }: {
   participant: Participant
   onDone: () => Promise<void>
 }) {
-  const [teams, setTeams] = useState<Team[]>([])
+  // joinable = has members and a free seat (00024); emptied teams are
+  // organizer business and never offered here
+  const [teams, setTeams] = useState<JoinableTeam[]>([])
   const [requests, setRequests] = useState<TeamJoinRequest[]>([])
   const [name, setName] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -561,7 +563,7 @@ function TeamPicker({ eventId, participant, onDone }: {
   }, [eventId, participant.id])
 
   useEffect(() => {
-    listTeams(eventId).then(setTeams).catch(() => {})
+    listJoinableTeams(eventId).then(setTeams).catch(() => {})
     loadRequests()
   }, [eventId, loadRequests])
 
@@ -635,6 +637,7 @@ function TeamPicker({ eventId, participant, onDone }: {
                 <li key={t.id}>
                   <span>
                     {t.name}
+                    <span className="muted">{t.member_count}/{t.team_size_max}</span>
                     {req?.status === 'pending' && <span className="badge badge-draft">Request pending</span>}
                     {req?.status === 'declined' && <span className="badge badge-ended">Declined</span>}
                   </span>
