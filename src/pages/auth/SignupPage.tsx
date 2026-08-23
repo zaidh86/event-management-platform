@@ -39,18 +39,21 @@ export function SignupPage() {
       <h1>Create account</h1>
       <form onSubmit={(e) => void onSubmit(e)} className="stack">
         <label>
-          Full name <span className="field-hint">Write your Full Name</span>
+          Full name
           <input value={fullName} onChange={(e) => setFullName(e.target.value)} required autoComplete="name" />
         </label>
         <label>
           Email
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" />
+          <input
+            type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+            required autoComplete="email" placeholder="Enter Your College Mail ID"
+          />
         </label>
         <label>
           Password
           <PasswordInput
             value={password} onChange={(e) => setPassword(e.target.value)}
-            required minLength={8} autoComplete="new-password"
+            required minLength={8} autoComplete="new-password" placeholder="Minimum 8 characters"
           />
         </label>
         {error && <p className="form-error">{error}</p>}
