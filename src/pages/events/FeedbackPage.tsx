@@ -3,7 +3,7 @@ import { MessageSquare, Plus, Sparkles } from 'lucide-react'
 import {
   analyzeFeedbackWithAi, countFeedbackResponses, createFeedbackForm, createQrConfig,
   deleteFeedbackForm, listFeedbackForms, listFeedbackResponses, listQrConfigs,
-  updateFeedbackForm,
+  updateFeedbackForm, updateQrConfig,
 } from '../../lib/api'
 import { publicQrUrl } from '../../lib/qr'
 import { QRCodeSVG } from 'qrcode.react'
@@ -94,6 +94,20 @@ export function FeedbackManager({ kind }: { kind: 'feedback' | 'reflection' }) {
     }
   }
 
+  // The form's `access` column is the authority (RLS + submit_feedback +
+  // resolve_public_qr all read it). The QR row's scanner_access is a label
+  // for the QR Operations list only — keep it in step so it never drifts
+  // when a form flips between public and participants-only.
+  async function syncQrAccess(form: FeedbackForm) {
+    const cfg = qrConfigs.find((c) => c.target === 'feedback' && c.config.feedback_form_id === form.id)
+    if (!cfg) return
+    const want = form.access === 'public' ? ['public'] : ['participant']
+    if (cfg.scanner_access.length === 1 && cfg.scanner_access[0] === want[0]) return
+    try {
+      await updateQrConfig(cfg.id, { scanner_access: want as QrConfig['scanner_access'] })
+    } catch { /* cosmetic — the form's access setting still governs */ }
+  }
+
   // one-click feedback QR: creates (or reveals) the QR operation for this form
   async function ensureQr(form: FeedbackForm) {
     const existing = qrConfigs.find(
@@ -142,9 +156,9 @@ export function FeedbackManager({ kind }: { kind: 'feedback' | 'reflection' }) {
           eventId={event.id}
           kind={kind}
           form={editing === 'new' ? null : editing}
-          onDone={() => {
+          onDone={(saved) => {
             setEditing(null)
-            reload()
+            void syncQrAccess(saved).finally(reload)
           }}
           onCancel={() => setEditing(null)}
         />
@@ -274,7 +288,7 @@ function FormEditor({ eventId, kind, form, onDone, onCancel }: {
   eventId: string
   kind: 'feedback' | 'reflection'
   form: FeedbackForm | null
-  onDone: () => void
+  onDone: (saved: FeedbackForm) => void
   onCancel: () => void
 }) {
   const toast = useToast()
@@ -308,20 +322,21 @@ function FormEditor({ eventId, kind, form, onDone, onCancel }: {
     setBusy(true)
     setError(null)
     try {
+      let saved: FeedbackForm
       if (form) {
-        await updateFeedbackForm(form.id, {
+        saved = await updateFeedbackForm(form.id, {
           title: title.trim(), kind, description: description.trim(),
           access, one_response_per_user: false, questions: clean,
         })
         toast('success', 'Form updated')
       } else {
-        await createFeedbackForm({
+        saved = await createFeedbackForm({
           event_id: eventId, title: title.trim(), kind, description: description.trim(),
           access, one_response_per_user: false, questions: clean,
         })
         toast('success', 'Form created')
       }
-      onDone()
+      onDone(saved)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed')
       setBusy(false)

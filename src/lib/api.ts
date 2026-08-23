@@ -10,7 +10,7 @@ import type {
   JudgingResult, LeaderboardRow, Participant, ParticipantRemovalResult,
   ParticipationMode, Profile,
   PublicQrResolution, QrAction, QrConfig, QrResolution, ScanOutcome, ScanRecord,
-  Submission, Team, Transaction, TransactionType, VerifiedCertificate,
+  Submission, Team, TeamJoinRequest, Transaction, TransactionType, VerifiedCertificate,
 } from './types'
 import type { Certificate, CertificateKind } from './types'
 
@@ -358,10 +358,40 @@ export async function createTeam(eventId: string, name: string): Promise<Team> {
   return data as Team
 }
 
-export async function joinTeam(teamId: string): Promise<Team> {
-  const { data, error } = await supabase.rpc('join_team', { p_team_id: teamId })
+// ---- team join requests (00023) -------------------------------------------------
+// Joining is by approval: the participant requests, the team's creator (or an
+// Event Manager) accepts/declines. Eligibility and capacity are re-checked
+// server-side at the moment of acceptance; join_team() is no longer callable
+// by clients.
+
+// RLS scopes rows: the requester sees their own, a team creator sees requests
+// to their team, Event Managers see all
+export async function listTeamJoinRequests(eventId: string): Promise<TeamJoinRequest[]> {
+  const { data, error } = await supabase
+    .from('team_join_requests').select('*').eq('event_id', eventId)
+    .order('created_at')
   throwIf(error)
-  return data as Team
+  return (data ?? []) as TeamJoinRequest[]
+}
+
+export async function requestTeamJoin(teamId: string): Promise<TeamJoinRequest> {
+  const { data, error } = await supabase.rpc('request_team_join', { p_team_id: teamId })
+  throwIf(error)
+  return data as TeamJoinRequest
+}
+
+export async function respondTeamJoinRequest(requestId: string, accept: boolean): Promise<TeamJoinRequest> {
+  const { data, error } = await supabase.rpc('respond_team_join_request', {
+    p_request_id: requestId, p_accept: accept,
+  })
+  throwIf(error)
+  return data as TeamJoinRequest
+}
+
+export async function withdrawTeamJoinRequest(requestId: string): Promise<TeamJoinRequest> {
+  const { data, error } = await supabase.rpc('withdraw_team_join_request', { p_request_id: requestId })
+  throwIf(error)
+  return data as TeamJoinRequest
 }
 
 export async function listTeams(eventId: string): Promise<Team[]> {

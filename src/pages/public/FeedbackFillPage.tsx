@@ -4,7 +4,21 @@ import { CheckCircle2, Star } from 'lucide-react'
 import { getFeedbackForm, submitFeedback } from '../../lib/api'
 import { useAuth } from '../../contexts/AuthContext'
 import { Skeleton } from '../../components/ui/Skeleton'
+import { ThemeToggle } from '../../components/ThemeToggle'
 import type { FeedbackForm, FeedbackQuestion } from '../../lib/types'
+
+// This page is reached straight from a scanned QR, outside the app shell, by
+// people who may never see the EMP topbar or Settings — so it carries the
+// same appearance control itself. Works signed-out and signed-in alike; it is
+// independent of the form's access rules.
+function PublicPageBar() {
+  return (
+    <div className="public-page-bar">
+      <span className="brand brand-sm">EMP</span>
+      <ThemeToggle />
+    </div>
+  )
+}
 
 // Respondent-facing feedback form (/f/:formId). Visibility is RLS-scoped:
 // anonymous visitors only ever see published PUBLIC forms; signed-in event
@@ -33,11 +47,12 @@ export function FeedbackFillPage() {
       .finally(() => setLoaded(true))
   }, [formId])
 
-  if (!loaded) return <div className="public-landing"><Skeleton lines={4} height="2rem" /></div>
+  if (!loaded) return <div className="public-landing"><PublicPageBar /><Skeleton lines={4} height="2rem" /></div>
 
   if (!form) {
     return (
       <div className="public-landing">
+        <PublicPageBar />
         <h1>Feedback</h1>
         <p className="muted">
           This feedback form is not available. It may not be published yet, or it
@@ -53,6 +68,7 @@ export function FeedbackFillPage() {
   if (done) {
     return (
       <div className="public-landing">
+        <PublicPageBar />
         <p className="feedback-done">
           <CheckCircle2 size={28} aria-hidden />
         </p>
@@ -104,6 +120,7 @@ export function FeedbackFillPage() {
 
   return (
     <div className="public-landing public-landing-form">
+      <PublicPageBar />
       {isReport && <p className="step-kicker">Event Report</p>}
       <h1>{form.title}</h1>
       {form.description && <p className="muted">{form.description}</p>}

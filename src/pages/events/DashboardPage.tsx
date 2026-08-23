@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '../../contexts/AuthContext'
-import { Award, CheckCircle2, FileText, LayoutGrid, MessageSquare, Paperclip, User, UsersRound, Wallet } from 'lucide-react'
+import { Award, Check, CheckCircle2, FileText, LayoutGrid, MessageSquare, Paperclip, User, UsersRound, Wallet, X } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import {
   createTeam, getAccountFor, getMyAttendance, getMyEventTable, getMySubmission,
-  getSubmissionDocumentUrl, getTeam, joinTeam, listAccountTransactions,
-  listCertificates, listFeedbackForms, listQrConfigs, listTeamMembers,
-  listTeams, registerForEvent, removeSubmissionDocument, saveSubmission,
-  uploadSubmissionDocument,
+  getSubmissionDocumentUrl, getTeam, listAccountTransactions,
+  listCertificates, listFeedbackForms, listQrConfigs, listTeamJoinRequests, listTeamMembers,
+  listTeams, registerForEvent, removeSubmissionDocument, requestTeamJoin,
+  respondTeamJoinRequest, saveSubmission, uploadSubmissionDocument, withdrawTeamJoinRequest,
 } from '../../lib/api'
 import { supabase } from '../../lib/supabase'
 import { fmtDateTime, fmtPoints, fmtSigned } from '../../lib/format'
@@ -21,7 +21,7 @@ import { StatTile } from '../../components/ui/StatTile'
 import { useEvent } from './EventLayout'
 import type {
   Account, AttendanceRecord, Certificate, EmpEvent, EventTable, FeedbackForm, Participant,
-  ParticipationMode, QrConfig, Submission, Team, Transaction,
+  ParticipationMode, QrConfig, Submission, Team, TeamJoinRequest, Transaction,
 } from '../../lib/types'
 
 export function DashboardPage() {
@@ -321,15 +321,24 @@ function ParticipantDashboard({ participant, refreshEvent, eventId }: {
         {/* team sections exist ONLY for participants who chose team mode */}
         {isTeamMode && (
           needsTeam
-            ? <TeamPicker eventId={eventId} onDone={refreshEvent} />
+            ? <TeamPicker eventId={eventId} participant={participant} onDone={refreshEvent} />
             : (
               <section className="card">
                 <h2>Team: {team?.name}</h2>
                 <ul className="member-list">
                   {teammates.map((m) => (
-                    <li key={m.id}>{m.display_name}{m.id === participant.id && ' (you)'}</li>
+                    <li key={m.id}>
+                      {m.display_name}{m.id === participant.id && ' (you)'}
+                      {team && m.user_id === team.created_by && <span className="badge badge-draft">Leader</span>}
+                    </li>
                   ))}
                 </ul>
+                {team && team.created_by === participant.user_id && (
+                  <JoinRequestsInbox
+                    eventId={eventId} team={team}
+                    onChanged={() => { void load() }}
+                  />
+                )}
                 {/* team QR moved to the "My QR codes" section below */}
               </section>
             )
@@ -529,26 +538,77 @@ function FeedbackQrCard({ form, token }: { form: FeedbackForm; token: string }) 
   )
 }
 
-function TeamPicker({ eventId, onDone }: { eventId: string; onDone: () => Promise<void> }) {
+// Joining is by approval (00023): "Request to join" creates a pending request
+// the team leader accepts or declines; membership appears only on acceptance.
+// The requester's rows arrive live over realtime, so an acceptance flips this
+// card into the team card without a reload.
+function TeamPicker({ eventId, participant, onDone }: {
+  eventId: string
+  participant: Participant
+  onDone: () => Promise<void>
+}) {
   const [teams, setTeams] = useState<Team[]>([])
+  const [requests, setRequests] = useState<TeamJoinRequest[]>([])
   const [name, setName] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+
+  const loadRequests = useCallback(() => {
+    listTeamJoinRequests(eventId)
+      .then((rs) => setRequests(rs.filter((r) => r.participant_id === participant.id)))
+      .catch(() => {})
+  }, [eventId, participant.id])
 
   useEffect(() => {
     listTeams(eventId).then(setTeams).catch(() => {})
-  }, [eventId])
+    loadRequests()
+  }, [eventId, loadRequests])
 
-  async function run(action: () => Promise<unknown>) {
+  // the leader decided: accepted → we are now a member (refresh the context);
+  // declined → reflect it so another team can be requested
+  useEffect(() => {
+    const channel = supabase
+      .channel(`join-requests-${participant.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'team_join_requests', filter: `participant_id=eq.${participant.id}` },
+        (payload) => {
+          const row = payload.new as TeamJoinRequest
+          setRequests((prev) => prev.map((r) => (r.id === row.id ? row : r)))
+          if (row.status === 'accepted') void onDone()
+        },
+      )
+      .subscribe()
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [participant.id, onDone])
+
+  async function run(action: () => Promise<unknown>, after: 'refresh' | 'requests' = 'refresh', message?: string) {
     setBusy(true)
     setError(null)
+    setNotice(null)
     try {
       await action()
-      await onDone()
+      if (after === 'refresh') {
+        await onDone()
+      } else {
+        loadRequests()
+        if (message) setNotice(message)
+        setBusy(false)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed')
       setBusy(false)
     }
+  }
+
+  // the most relevant request per team: pending wins, else the latest decision
+  function requestFor(teamId: string): TeamJoinRequest | undefined {
+    const mine = requests.filter((r) => r.team_id === teamId)
+    return mine.find((r) => r.status === 'pending')
+      ?? mine.slice().sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0]
   }
 
   return (
@@ -567,20 +627,126 @@ function TeamPicker({ eventId, onDone }: { eventId: string; onDone: () => Promis
       {teams.length > 0 && (
         <>
           <h3>Existing teams</h3>
+          <p className="subtle-note">Ask to join — the team leader accepts or declines your request.</p>
           <ul className="team-list">
-            {teams.map((t) => (
-              <li key={t.id}>
-                <span>{t.name}</span>
-                <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void run(() => joinTeam(t.id))}>
-                  Join
-                </button>
-              </li>
-            ))}
+            {teams.map((t) => {
+              const req = requestFor(t.id)
+              return (
+                <li key={t.id}>
+                  <span>
+                    {t.name}
+                    {req?.status === 'pending' && <span className="badge badge-draft">Request pending</span>}
+                    {req?.status === 'declined' && <span className="badge badge-ended">Declined</span>}
+                  </span>
+                  {req?.status === 'pending' ? (
+                    <button
+                      type="button" className="btn btn-ghost btn-sm" disabled={busy}
+                      onClick={() => void run(() => withdrawTeamJoinRequest(req.id), 'requests', 'Request withdrawn')}
+                    >
+                      Withdraw
+                    </button>
+                  ) : (
+                    <button
+                      type="button" className="btn btn-ghost btn-sm" disabled={busy}
+                      onClick={() => void run(() => requestTeamJoin(t.id), 'requests', `Join request sent to ${t.name}`)}
+                    >
+                      {req?.status === 'declined' ? 'Request again' : 'Request to join'}
+                    </button>
+                  )}
+                </li>
+              )
+            })}
           </ul>
         </>
       )}
+      {notice && <p className="form-notice">{notice}</p>}
       {error && <p className="form-error">{error}</p>}
     </section>
+  )
+}
+
+// Leader-side inbox (00023). Only the team's creator sees it (RLS) and only
+// they — or an Event Manager — can decide (RPC). Capacity and eligibility are
+// re-checked server-side at the moment of acceptance.
+function JoinRequestsInbox({ eventId, team, onChanged }: {
+  eventId: string
+  team: Team
+  onChanged: () => void
+}) {
+  const [requests, setRequests] = useState<TeamJoinRequest[]>([])
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const reload = useCallback(() => {
+    listTeamJoinRequests(eventId)
+      .then((rs) => setRequests(rs.filter((r) => r.team_id === team.id && r.status === 'pending')))
+      .catch(() => {})
+  }, [eventId, team.id])
+
+  useEffect(() => { reload() }, [reload])
+
+  // new requests arrive live
+  useEffect(() => {
+    const channel = supabase
+      .channel(`team-inbox-${team.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'team_join_requests', filter: `team_id=eq.${team.id}` },
+        () => reload(),
+      )
+      .subscribe()
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [team.id, reload])
+
+  async function decide(req: TeamJoinRequest, accept: boolean) {
+    setBusyId(req.id)
+    setError(null)
+    try {
+      await respondTeamJoinRequest(req.id, accept)
+      reload()
+      if (accept) onChanged()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update the request')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  if (requests.length === 0 && !error) return null
+
+  return (
+    <div className="stack join-inbox">
+      <h3>Join requests</h3>
+      <ul className="join-request-list">
+        {requests.map((r) => (
+          <li key={r.id} className="join-request">
+            <div>
+              <strong>{r.display_name}</strong>
+              <p className="muted">wants to join your team</p>
+            </div>
+            <div className="join-request-actions">
+              <button
+                type="button" className="btn btn-sm btn-accept" disabled={busyId === r.id}
+                title="Accept request" aria-label={`Accept ${r.display_name}'s request to join`}
+                onClick={() => void decide(r, true)}
+              >
+                <Check size={16} aria-hidden /> Accept
+              </button>
+              <button
+                type="button" className="btn btn-sm btn-decline" disabled={busyId === r.id}
+                title="Decline request" aria-label={`Decline ${r.display_name}'s request to join`}
+                onClick={() => void decide(r, false)}
+              >
+                <X size={16} aria-hidden /> Decline
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
+      {error && <p className="form-error">{error}</p>}
+    </div>
   )
 }
 

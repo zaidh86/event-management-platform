@@ -781,3 +781,24 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 .ai-panel { border: 1px dashed var(--border); border-radius: var(--radius-sm); padding: var(--s3); display: grid; gap: var(--s2); }
 .ai-analysis h4 { margin: var(--s2) 0 0.2rem; font-size: var(--fs-3); }
 .ai-analysis ul, .ai-analysis ol { margin: 0; padding-left: 1.2rem; }
+
+/* ---- public page bar (QR-opened pages outside the app shell) ---- */
+.public-page-bar {
+  display: flex; justify-content: space-between; align-items: center; width: 100%;
+  margin-bottom: calc(var(--s2) * -1);
+}
+.brand-sm { font-size: var(--fs-3); opacity: 0.8; }
+
+/* ---- team join requests ---- */
+.join-request-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); }
+.join-request {
+  display: flex; justify-content: space-between; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  padding: var(--s3); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.join-request p { margin: 0; }
+.join-request-actions { display: flex; gap: var(--s2); flex-wrap: wrap; }
+.btn-accept { color: var(--pos); border-color: var(--pos); background: transparent; }
+.btn-accept:hover:not(:disabled) { background: var(--pos); color: var(--bg); }
+.btn-decline { color: var(--neg); border-color: var(--neg); background: transparent; }
+.btn-decline:hover:not(:disabled) { background: var(--neg); color: var(--bg); }
+.team-list li > span { display: inline-flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }

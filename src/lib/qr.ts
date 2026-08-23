@@ -38,7 +38,7 @@ export const ACCESS_LABELS: Record<ScannerAccess, string> = {
   volunteer: 'Volunteers',
   judge: 'Judges',
   participant: 'Participants (self-service)',
-  public: 'Public (no sign-in)',
+  public: 'Public (sign-in not required)',
 }
 
 // which scanner-access choices make sense per target

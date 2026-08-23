@@ -261,6 +261,24 @@ export interface Team {
   created_at: string
 }
 
+// team join approval workflow (00023): a request records intent only;
+// membership is still participants.team_id, written on acceptance
+export type TeamJoinRequestStatus = 'pending' | 'accepted' | 'declined' | 'withdrawn'
+
+export interface TeamJoinRequest {
+  id: string
+  event_id: string
+  team_id: string
+  participant_id: string
+  user_id: string
+  display_name: string
+  status: TeamJoinRequestStatus
+  decided_by: string | null
+  decided_at: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface Participant {
   id: string
   event_id: string
