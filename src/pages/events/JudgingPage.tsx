@@ -447,37 +447,152 @@ function ResultsSection({ eventId, judgeCount }: { eventId: string; judgeCount: 
 
 // ---- criteria management -----------------------------------------------------
 
+// Draft-based editor (bugfix): while the manager edits, everything lives in
+// LOCAL drafts — no database write happens per keystroke or per checkbox, and
+// nothing ever reloads server rows over unsaved edits. An explicit "Save
+// criteria" persists all changed rows through the existing updateCriterion
+// path; a failed save keeps the drafts on screen. Numeric fields are held as
+// strings while editing so "10" never passes through as "1".
+interface CriterionDraft {
+  id: string
+  name: string
+  description: string
+  ai_instructions: string
+  max_score: string
+  weight: string
+  required: boolean
+  is_enabled: boolean
+}
+
+function toDraft(c: JudgingCriterion): CriterionDraft {
+  return {
+    id: c.id,
+    name: c.name,
+    description: c.description,
+    ai_instructions: c.ai_instructions ?? '',
+    max_score: String(c.max_score),
+    weight: String(c.weight),
+    required: c.required,
+    is_enabled: c.is_enabled,
+  }
+}
+
+function draftChanged(d: CriterionDraft, saved: CriterionDraft): boolean {
+  return d.name !== saved.name || d.description !== saved.description
+    || d.ai_instructions !== saved.ai_instructions
+    || d.max_score !== saved.max_score || d.weight !== saved.weight
+    || d.required !== saved.required || d.is_enabled !== saved.is_enabled
+}
+
 function CriteriaSection({ eventId }: { eventId: string }) {
   const toast = useToast()
-  const [criteria, setCriteria] = useState<JudgingCriterion[] | null>(null)
-  const [confirmDelete, setConfirmDelete] = useState<JudgingCriterion | null>(null)
+  const [drafts, setDrafts] = useState<CriterionDraft[] | null>(null)
+  // last-saved snapshot: dirty detection + "save only what changed"
+  const [saved, setSaved] = useState<Map<string, CriterionDraft>>(new Map())
+  const [confirmDelete, setConfirmDelete] = useState<CriterionDraft | null>(null)
+  const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  const reload = useCallback(() => {
-    listCriteria(eventId).then(setCriteria).catch(() => setCriteria([]))
+  // load ONCE per event — never re-fetched behind the user's back, and a
+  // fetch failure never replaces an already-loaded list
+  useEffect(() => {
+    let cancelled = false
+    listCriteria(eventId)
+      .then((cs) => {
+        if (cancelled) return
+        setDrafts(cs.map(toDraft))
+        setSaved(new Map(cs.map((c) => [c.id, toDraft(c)])))
+      })
+      .catch(() => {
+        if (!cancelled) setDrafts((prev) => prev ?? [])
+      })
+    return () => { cancelled = true }
   }, [eventId])
-  useEffect(() => { reload() }, [reload])
 
-  async function patch(c: JudgingCriterion, fields: Partial<JudgingCriterion>) {
+  const dirty = (drafts ?? []).some((d) => {
+    const base = saved.get(d.id)
+    return !base || draftChanged(d, base)
+  })
+
+  function edit(id: string, fields: Partial<CriterionDraft>) {
+    setDrafts((ds) => ds?.map((d) => (d.id === id ? { ...d, ...fields } : d)) ?? null)
+  }
+
+  async function saveAll() {
+    if (!drafts || busy) return
+    setError(null)
+    // validate BEFORE writing anything
+    const names = new Set<string>()
+    for (const d of drafts) {
+      const name = d.name.trim()
+      if (name === '') {
+        setError('Every criterion needs a name.')
+        return
+      }
+      if (names.has(name.toLowerCase())) {
+        setError(`Two criteria are both named "${name}" — names must be unique.`)
+        return
+      }
+      names.add(name.toLowerCase())
+      const max = Number(d.max_score)
+      if (!Number.isFinite(max) || max <= 0) {
+        setError(`"${name}": maximum score must be a number greater than 0.`)
+        return
+      }
+      const weight = Number(d.weight)
+      if (!Number.isFinite(weight) || weight < 0) {
+        setError(`"${name}": weight must be 0 or more.`)
+        return
+      }
+    }
+    const changed = drafts.filter((d) => {
+      const base = saved.get(d.id)
+      return !base || draftChanged(d, base)
+    })
+    if (changed.length === 0) return
+    setBusy(true)
     try {
-      await updateCriterion(c.id, fields)
-      reload()
+      const results = new Map(saved)
+      for (const d of changed) {
+        const updated = await updateCriterion(d.id, {
+          name: d.name.trim(),
+          description: d.description,
+          ai_instructions: d.ai_instructions,
+          max_score: Number(d.max_score),
+          weight: Number(d.weight),
+          required: d.required,
+          is_enabled: d.is_enabled,
+        })
+        results.set(d.id, toDraft(updated))
+      }
+      setSaved(results)
+      // normalize drafts to what the server now holds (trimmed names etc.)
+      setDrafts((ds) => ds?.map((d) => results.get(d.id) ?? d) ?? null)
+      toast('success', `${changed.length} criteri${changed.length === 1 ? 'on' : 'a'} saved`)
     } catch (err) {
-      toast('error', err instanceof Error ? err.message : 'Update failed')
+      // drafts stay exactly as the user left them
+      setError(err instanceof Error ? err.message : 'Save failed — your edits are still here, try again.')
+    } finally {
+      setBusy(false)
     }
   }
 
   async function add() {
+    if (!drafts) return
     setBusy(true)
+    setError(null)
     try {
-      await createCriterion({
+      const row = await createCriterion({
         event_id: eventId,
-        name: `Criterion ${(criteria?.length ?? 0) + 1}`,
-        sort_order: criteria?.length ?? 0,
+        name: `Criterion ${drafts.length + 1}`,
+        sort_order: drafts.length,
       })
-      reload()
+      // append locally — never a full reload that could clobber other edits
+      const d = toDraft(row)
+      setDrafts((ds) => [...(ds ?? []), d])
+      setSaved((m) => new Map(m).set(d.id, d))
     } catch (err) {
-      toast('error', err instanceof Error ? err.message : 'Create failed')
+      setError(err instanceof Error ? err.message : 'Create failed')
     } finally {
       setBusy(false)
     }
@@ -489,8 +604,9 @@ function CriteriaSection({ eventId }: { eventId: string }) {
     try {
       await deleteCriterion(confirmDelete.id)
       toast('success', `"${confirmDelete.name}" removed`)
+      setDrafts((ds) => ds?.filter((d) => d.id !== confirmDelete.id) ?? null)
+      setSaved((m) => { const n = new Map(m); n.delete(confirmDelete.id); return n })
       setConfirmDelete(null)
-      reload()
     } catch (err) {
       toast('error', err instanceof Error ? err.message : 'Delete failed')
       setConfirmDelete(null)
@@ -511,69 +627,73 @@ function CriteriaSection({ eventId }: { eventId: string }) {
         <strong> AI instructions</strong> tell the AI assistant what to look
         for when suggesting a score (optional — it falls back to the guidance).
       </p>
-      {criteria === null && <Skeleton lines={2} height="2.2rem" />}
-      {criteria?.map((c) => {
-        const edit = (fields: Partial<JudgingCriterion>) =>
-          setCriteria((cs) => cs?.map((x) => x.id === c.id ? { ...x, ...fields } : x) ?? null)
-        return (
-          <div className="criterion-card card" key={c.id}>
-            <div className="criterion-line">
-              <label>
-                Criterion
-                <input
-                  value={c.name} maxLength={80}
-                  onBlur={(e) => { if (e.target.value !== c.name) void patch(c, { name: e.target.value }) }}
-                  onChange={(e) => edit({ name: e.target.value })}
-                />
-              </label>
-              <label className="crit-num">
-                Max score
-                <input
-                  type="number" min={1} step="any" value={c.max_score}
-                  onChange={(e) => void patch(c, { max_score: Number(e.target.value) || 1 })}
-                />
-              </label>
-              <label className="crit-num">
-                Weight
-                <input
-                  type="number" min={0} step="any" value={c.weight}
-                  onChange={(e) => void patch(c, { weight: Number(e.target.value) })}
-                />
-              </label>
-            </div>
+      {drafts === null && <Skeleton lines={2} height="2.2rem" />}
+      {drafts?.map((c) => (
+        <div className="criterion-card card" key={c.id}>
+          <div className="criterion-line">
             <label>
-              Guidance for judges <span className="field-hint">what does this criterion mean? what does a high score look like?</span>
-              <textarea
-                rows={2} value={c.description} maxLength={1000}
-                onBlur={(e) => { if (e.target.value !== c.description) void patch(c, { description: e.target.value }) }}
-                onChange={(e) => edit({ description: e.target.value })}
+              Criterion
+              <input
+                value={c.name} maxLength={80}
+                onChange={(e) => edit(c.id, { name: e.target.value })}
               />
             </label>
-            <label>
-              AI instructions <span className="field-hint">what should the AI look for and how should it score it? (optional)</span>
-              <textarea
-                rows={2} value={c.ai_instructions ?? ''} maxLength={2000}
-                onBlur={(e) => { if (e.target.value !== (c.ai_instructions ?? '')) void patch(c, { ai_instructions: e.target.value }) }}
-                onChange={(e) => edit({ ai_instructions: e.target.value })}
+            <label className="crit-num">
+              Max score
+              <input
+                type="number" min={1} step="any" value={c.max_score}
+                onChange={(e) => edit(c.id, { max_score: e.target.value })}
               />
             </label>
-            <div className="criterion-line">
-              <label className="check">
-                <input type="checkbox" checked={c.required} onChange={(e) => void patch(c, { required: e.target.checked })} />
-                Required before a judge can finalize
-              </label>
-              <label className="check">
-                <input type="checkbox" checked={c.is_enabled} onChange={(e) => void patch(c, { is_enabled: e.target.checked })} />
-                Enabled
-              </label>
-              <button className="btn btn-ghost btn-sm" onClick={() => setConfirmDelete(c)}>Remove</button>
-            </div>
+            <label className="crit-num">
+              Weight
+              <input
+                type="number" min={0} step="any" value={c.weight}
+                onChange={(e) => edit(c.id, { weight: e.target.value })}
+              />
+            </label>
           </div>
-        )
-      })}
-      <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void add()}>
-        <Plus size={14} aria-hidden /> Add criterion
-      </button>
+          <label>
+            Guidance for judges <span className="field-hint">what does this criterion mean? what does a high score look like?</span>
+            <textarea
+              rows={2} value={c.description} maxLength={1000}
+              onChange={(e) => edit(c.id, { description: e.target.value })}
+            />
+          </label>
+          <label>
+            AI instructions <span className="field-hint">what should the AI look for and how should it score it? (optional)</span>
+            <textarea
+              rows={2} value={c.ai_instructions} maxLength={2000}
+              onChange={(e) => edit(c.id, { ai_instructions: e.target.value })}
+            />
+          </label>
+          <div className="criterion-line">
+            <label className="check">
+              <input type="checkbox" checked={c.required} onChange={(e) => edit(c.id, { required: e.target.checked })} />
+              Required before a judge can finalize
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={c.is_enabled} onChange={(e) => edit(c.id, { is_enabled: e.target.checked })} />
+              Enabled
+            </label>
+            <button className="btn btn-ghost btn-sm" onClick={() => setConfirmDelete(c)}>Remove</button>
+          </div>
+        </div>
+      ))}
+      <div className="row">
+        <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void add()}>
+          <Plus size={14} aria-hidden /> Add criterion
+        </button>
+        <button
+          className="btn btn-primary"
+          disabled={busy || !dirty}
+          onClick={() => void saveAll()}
+        >
+          {busy ? 'Saving…' : 'Save criteria'}
+        </button>
+        {dirty && !busy && <span className="muted">Unsaved changes</span>}
+      </div>
+      {error && <p className="form-error">{error}</p>}
 
       <ConfirmDialog
         open={confirmDelete !== null}
