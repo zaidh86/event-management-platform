@@ -802,3 +802,5 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 .btn-decline { color: var(--neg); border-color: var(--neg); background: transparent; }
 .btn-decline:hover:not(:disabled) { background: var(--neg); color: var(--bg); }
 .team-list li > span { display: inline-flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+
+.nowrap { white-space: nowrap; }

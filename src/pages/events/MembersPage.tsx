@@ -22,6 +22,11 @@ export function MembersPage() {
   const [role, setRole] = useState<EventRole>('volunteer')
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  // The contact column comes from the event's OWN registration form: the
+  // first configured field that reads like a mobile/phone number. Its value
+  // lives in participants.registration_data under that field's key — no
+  // schema, no hardcoded key. Events without such a field show no column.
+  const mobileField = event.registration_fields.find((f) => /mobile|phone|contact/i.test(f.label))
   const [toRemove, setToRemove] = useState<(EventMember & { profile: Profile }) | null>(null)
   const [removing, setRemoving] = useState(false)
 
@@ -183,12 +188,17 @@ export function MembersPage() {
       <div className="card table-scroll">
         <table className="table">
           <thead>
-            <tr><th>Participant</th><th>Registered as</th><th>Registered</th><th /></tr>
+            <tr>
+              <th>Participant</th><th>Registered as</th>
+              {mobileField && <th>{mobileField.label}</th>}
+              <th>Registered</th><th />
+            </tr>
           </thead>
           <tbody>
             {participants.map((p) => {
               // the STORED participation mode is the source of truth (ADR-0007)
               const teamName = p.team_id ? teams.find((t) => t.id === p.team_id)?.name : null
+              const mobile = mobileField ? String(p.registration_data?.[mobileField.key] ?? '').trim() : ''
               return (
                 <tr key={p.id}>
                   <td>{p.display_name}</td>
@@ -197,6 +207,7 @@ export function MembersPage() {
                       ? `Team${teamName ? ` — ${teamName}` : ' (no team yet)'}`
                       : 'Solo'}
                   </td>
+                  {mobileField && <td className="nowrap">{mobile || '—'}</td>}
                   <td className="muted">{new Date(p.created_at).toLocaleDateString()}</td>
                   <td>
                     <button
