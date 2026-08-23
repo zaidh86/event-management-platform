@@ -112,9 +112,16 @@ export function HomePage() {
       <footer className="about-emp">
         <h2>About EMP</h2>
         <p className="muted">
-          EMP is a centralized event management platform that helps colleges,
-          clubs, organizers and participants run events, registrations,
-          participation and event operations from one place.
+          EMP (Event Management Platform) was built to solve the problem of
+          managing events through multiple disconnected tools and manual
+          processes. It brings registrations, participation, team management,
+          attendance, submissions, feedback, and other event operations
+          together in one platform, making events easier to organize and
+          manage.
+        </p>
+        <p className="muted">
+          EMP is designed and developed by Zaid Hussain, a B.Sc. Data Science
+          student at St. Joseph&apos;s Degree &amp; P.G. College.
         </p>
       </footer>
     </div>
