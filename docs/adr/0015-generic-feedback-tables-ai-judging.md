@@ -89,29 +89,33 @@ temporarily unavailable. You can continue with manual judging."
 Feedback analysis sends **answers only** — never respondent ids, categories,
 timestamps or emails — and stores nothing.
 
-### Provider choice (research pass, 2026-08-23)
+### Provider chain (re-verified 2026-08-23, 3-provider pass)
 
-Primary: **Google Gemini, `gemini-2.5-flash`** — the only no-card free API
-that natively ingests a 10 MB / 50-page PDF (text, figures, tables), returns
-JSON-mode output, 1M context. Free-tier numeric limits are no longer public
-(visible only in AI Studio); third-party snapshots range 250–1,500 RPD. One
-full pass (≈220 calls for 200 entries + 20 feedback summaries) fits a quota
-day even at 250 RPD; a same-day re-run does not. Quota resets at midnight
-Pacific. Free-tier prompts may be used by Google to improve products — if the
-college needs to avoid that, enabling billing (≈$3–6 for the whole event at
-$0.30/M input) removes both the quota and the training-use concern with no
-code change.
+Ordered chain, configured only through Edge Function secrets
+(`supabase/functions/.env.example`); a request runs on the first provider and
+advances ONLY on a recoverable provider failure (HTTP 429, 5xx, timeout,
+network). Auth errors (401/403), other 4xx, unusable model output and EMP-side
+input errors never cascade — a fallback must not hide a bug.
 
-Fallback (optional): Mistral free mode, `mistral-small-latest`, PDF via
-`document_url`; or Groq `openai/gpt-oss-120b` for text-only feedback
-summaries (8K TPM — cannot take PDFs). Rejected: OpenRouter `:free` (50 RPD
-without a $10 top-up), Cerebras/Cloudflare/NVIDIA/Qwen (no native PDF and/or
-token quotas an order of magnitude too small), OpenAI/DeepSeek/Together/
-Fireworks/HF (no usable free tier).
+| Tier | Provider / model | Wire format | PDF |
+|---|---|---|---|
+| primary | Google Gemini `gemini-3.7-flash` | native `generateContent`, `x-goog-api-key`, `responseMimeType` + `responseJsonSchema` | `inlineData` (native, reads figures/tables) |
+| fallback 1 | Mistral `mistral-medium-3-5` | OpenAI-compatible `/chat/completions`, `response_format: json_schema` | `document_url` data URL (Document QnA, built-in OCR) |
+| fallback 2 | OpenRouter `z-ai/glm-5.2:free` | OpenAI-compatible, `response_format: json_schema`, `provider.require_parameters` | `file` part + `plugins:[file-parser/cloudflare-ai]` — the FREE parser, pinned so the billed `mistral-ocr` default is never used; text-only extraction |
 
-Secrets: `AI_PROVIDER`, `AI_PROVIDER_API_KEY`, `AI_MODEL` (+ optional
-`AI_FALLBACK_*`) — Edge Function secrets only; never `VITE_*`.
-Template: `supabase/functions/.env.example`.
+Earlier picks (`gemini-2.5-flash`, `mistral-small-latest`, `openai/gpt-oss-120b:free`)
+were superseded or removed by the providers. Free-tier numeric limits for
+Gemini and Mistral are no longer public (AI Studio / Admin Panel only);
+OpenRouter `:free` is 20 RPM and 50 RPD → 1,000 RPD after a one-time $10
+purchase. Privacy: Gemini free tier may use inputs for product improvement
+(enable billing for the event days to avoid this); Mistral free mode has an
+opt-out toggle; OpenRouter free routes depend on the upstream provider.
+
+Schema enforcement is requested from every provider, but EMP validation
+(`validateSubmissionAnalysis` / `validateFeedbackAnalysis`) remains the
+authority: criteria must exist and be enabled, scores clamp to `[0, max]`,
+text is bounded, unknown keys are dropped. Tests: `npm run test:ai`
+(`tests/ai/ai-adapter.test.mjs`, mocks only).
 
 ## Consequences
 

@@ -21,13 +21,15 @@
 // RLS; the service role is used only afterwards, for the narrow reads/writes
 // the task needs. The provider key never leaves this function.
 //
+// Provider chain (Gemini → Mistral → OpenRouter) lives in _shared/ai.ts and is
+// configured ONLY through Edge Function secrets — see supabase/functions/.env.example.
+//
 // Deploy:   supabase functions deploy ai-service
-// Secrets:  supabase secrets set AI_PROVIDER=gemini AI_PROVIDER_API_KEY=... AI_MODEL=gemini-2.5-flash
-//           (see supabase/functions/.env.example for every variable)
+// Secrets:  supabase secrets set --env-file supabase/functions/.env
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import {
-  AiError, analyzeFeedback, analyzeSubmission, bytesToBase64, loadConfig, withFallback,
+  AiError, analyzeFeedback, analyzeSubmission, bytesToBase64, loadProviderChain, runWithFallback,
   type Attachment, type CriterionSpec,
 } from "../_shared/ai.ts";
 
@@ -39,6 +41,16 @@ const CORS = {
 
 const PDF_MAX_BYTES = 10 * 1024 * 1024; // matches the submission-docs bucket cap (00020)
 const FEEDBACK_MAX_RESPONSES = 400;     // bounded prompt; newest responses first
+// Whole-request budget for the provider chain, below the Edge Function
+// wall-clock limit so a slow chain ends with a clean timeout, not a killed
+// function. Override with AI_REQUEST_BUDGET_MS.
+const REQUEST_BUDGET_MS = Math.max(20_000, Number(Deno.env.get("AI_REQUEST_BUDGET_MS") ?? 140_000) || 140_000);
+// judges may re-run an analysis, but not hammer a paid provider: a fresh
+// result younger than this is returned instead of regenerated (managers exempt)
+const FORCE_COOLDOWN_MS = 2 * 60_000;
+// question labels that mark identity fields — their answers are never sent
+// to the AI (the summary needs opinions, not names)
+const IDENTITY_LABEL = /^(full\s+)?name$|\b(e-?mail|phone|mobile|whatsapp|roll\s*(no\.?|number)?|registration\s*(no\.?|number)|student\s*id|enrol?ment\s*(no\.?|number))\b/i;
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
@@ -73,11 +85,13 @@ Deno.serve(async (req) => {
     return json({ error: `Unknown task "${body.task}"` }, 400);
   } catch (e) {
     if (e instanceof AiError) {
-      const status = e.kind === "missing_key" ? 503
+      const status = e.kind === "missing_key" || e.kind === "unsupported" ? 503
         : e.kind === "rate_limited" ? 429
         : e.kind === "timeout" ? 504
         : e.kind === "input" ? 400
-        : 502;
+        : 502; // auth / unavailable / network / provider / bad_output
+      // metadata only — never the request, the key or any document
+      console.warn(JSON.stringify({ ai: "request_failed", kind: e.kind, status: e.status ?? null }));
       return json({ error: e.message, kind: e.kind }, status);
     }
     console.error("ai-service failure", e);
@@ -118,12 +132,15 @@ async function suggestScores(asCaller: Client, service: Client, body: Record<str
     return json({ error: "AI-assisted judging is not enabled for this event (Event settings → Submissions)." }, 400);
   }
 
-  // 4. Cached result unless forced
-  if (!force) {
-    const { data: existing } = await service
-      .from("judge_evaluations").select("*")
-      .eq("submission_id", submissionId).eq("source", "ai").maybeSingle();
-    if (existing) return json({ evaluation: existing, cached: true });
+  // 4. Cached result unless forced (and even then, a result younger than the
+  //    cooldown is reused unless an Event Manager asks)
+  const { data: existing } = await service
+    .from("judge_evaluations").select("*")
+    .eq("submission_id", submissionId).eq("source", "ai").maybeSingle();
+  if (existing) {
+    const generatedAt = Date.parse(String(existing.details?.generated_at ?? "")) || 0;
+    const fresh = Date.now() - generatedAt < FORCE_COOLDOWN_MS;
+    if (!force || (fresh && mayManage !== true)) return json({ evaluation: existing, cached: true });
   }
 
   // 5. Criteria (enabled only) — the validator maps suggestions back to these
@@ -150,20 +167,20 @@ async function suggestScores(asCaller: Client, service: Client, body: Record<str
     attachment = { mime: "application/pdf", base64: bytesToBase64(bytes), name: sub.document_name || "report.pdf" };
   }
 
-  // 7. Ask the provider (primary → fallback), validate, store
-  const cfgs = loadConfig();
-  let usedModel = cfgs.primary.model;
-  const analysis = await withFallback(cfgs, (cfg) => {
-    usedModel = cfg.model;
-    return analyzeSubmission(cfg, {
-      title: String(sub.title ?? ""),
+  // 7. Ask the provider chain (first capable provider; next only on a
+  //    recoverable provider failure), validate, store
+  const chain = loadProviderChain();
+  const deadline = Date.now() + REQUEST_BUDGET_MS;
+  const { result: analysis, provider } = await runWithFallback(chain, attachment !== undefined, (cfg) =>
+    analyzeSubmission(cfg, {
+      title: String(sub.title ?? "").slice(0, 300),
       description: String(sub.description ?? "").slice(0, 20_000),
       fields: (sub.content && typeof sub.content === "object") ? sub.content : {},
       attachment,
       eventName: String(ev.name),
       instructions: String(ev.submission_config?.instructions ?? "").slice(0, 2000),
-    }, criteria);
-  });
+    }, criteria), deadline);
+  const usedModel = provider.model;
 
   const scores: Record<string, number> = {};
   for (const s of analysis.suggestions) scores[s.criterion_id] = s.suggested_score;
@@ -191,7 +208,8 @@ async function suggestScores(asCaller: Client, service: Client, body: Record<str
           source: "ai", scores, notes, details, status: "draft",
         }).select().single();
   if (row.error || !row.data) {
-    console.error("ai row write failed", row.error);
+    // code + message only — never `details`/`hint`, which can carry row content
+    console.error(JSON.stringify({ ai: "ai_row_write_failed", code: row.error?.code ?? null, message: row.error?.message ?? null }));
     return json({ error: "The suggestion was generated but could not be stored." }, 500);
   }
   return json({ evaluation: row.data, cached: false });
@@ -216,25 +234,27 @@ async function feedbackSummary(asCaller: Client, service: Client, body: Record<s
     .from("feedback_responses").select("answers")
     .eq("form_id", formId).order("created_at", { ascending: false })
     .limit(FEEDBACK_MAX_RESPONSES);
-  const answers = (responses ?? []).map((r: { answers: unknown }) =>
-    (r.answers && typeof r.answers === "object") ? r.answers as Record<string, unknown> : {});
+  // identity-type questions (name, roll number, email, …) are dropped from
+  // both the question list and every answer before anything leaves the server
+  const questions = (Array.isArray(form.questions) ? form.questions : [])
+    .map((q: Record<string, unknown>) => ({ key: String(q.key), label: String(q.label), type: String(q.type) }))
+    .filter((q: { label: string }) => !IDENTITY_LABEL.test(q.label.trim()));
+  const keep = new Set(questions.map((q: { key: string }) => q.key));
+  const answers = (responses ?? []).map((r: { answers: unknown }) => {
+    const a = (r.answers && typeof r.answers === "object") ? r.answers as Record<string, unknown> : {};
+    return Object.fromEntries(Object.entries(a).filter(([k]) => keep.has(k)));
+  }).filter((a: Record<string, unknown>) => Object.keys(a).length > 0);
   if (answers.length === 0) return json({ error: "There are no responses to analyze yet." }, 400);
 
-  const questions = (Array.isArray(form.questions) ? form.questions : [])
-    .map((q: Record<string, unknown>) => ({ key: String(q.key), label: String(q.label), type: String(q.type) }));
-
-  const cfgs = loadConfig();
-  let usedModel = cfgs.primary.model;
-  const analysis = await withFallback(cfgs, (cfg) => {
-    usedModel = cfg.model;
-    return analyzeFeedback(cfg, {
+  const chain = loadProviderChain();
+  const { result: analysis, provider } = await runWithFallback(chain, false, (cfg) =>
+    analyzeFeedback(cfg, {
       eventName: String(ev?.name ?? "Event"),
       formTitle: String(form.title),
       questions,
       responses: answers,
-    });
-  });
-  return json({ analysis: { ...analysis, model: usedModel } });
+    }), Date.now() + REQUEST_BUDGET_MS);
+  return json({ analysis: { ...analysis, model: provider.model } });
 }
 
 function json(data: unknown, status = 200): Response {

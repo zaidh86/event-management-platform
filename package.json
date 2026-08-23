@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
+    "test:ai": "node --test tests/ai/*.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
