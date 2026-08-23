@@ -6,6 +6,7 @@ import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../contexts/AuthContext'
 import { useTheme, type ThemePref } from '../../contexts/ThemeContext'
 import { useToast } from '../../components/ui/Toast'
+import { PasswordInput } from '../../components/ui/PasswordInput'
 import { platformRoleLabel } from '../../lib/roles'
 
 // Personal settings (/settings): the signed-in person's own account and
@@ -53,7 +54,7 @@ export function AccountSettingsPage() {
         <h2>Account</h2>
         <form onSubmit={(e) => void onSave(e)} className="stack">
           <label>
-            Display name
+            Display name <span className="field-hint">Write your Full Name</span>
             <input
               value={name} maxLength={80}
               onChange={(e) => setName(e.target.value)}
@@ -186,24 +187,24 @@ function ChangePasswordSection() {
       <form onSubmit={(e) => void onSubmit(e)} className="stack">
         <label>
           Current password
-          <input
-            type="password" value={current} required
+          <PasswordInput
+            value={current} required
             autoComplete="current-password"
             onChange={(e) => setCurrent(e.target.value)}
           />
         </label>
         <label>
           New password
-          <input
-            type="password" value={password} minLength={8} required
+          <PasswordInput
+            value={password} minLength={8} required
             autoComplete="new-password"
             onChange={(e) => setPassword(e.target.value)}
           />
         </label>
         <label>
           Confirm new password
-          <input
-            type="password" value={confirm} minLength={8} required
+          <PasswordInput
+            value={confirm} minLength={8} required
             autoComplete="new-password"
             onChange={(e) => setConfirm(e.target.value)}
           />

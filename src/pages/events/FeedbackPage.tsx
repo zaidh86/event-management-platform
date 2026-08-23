@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import { MessageSquare, Plus } from 'lucide-react'
+import { MessageSquare, Plus, Sparkles } from 'lucide-react'
 import {
-  countFeedbackResponses, createFeedbackForm, createQrConfig, deleteFeedbackForm,
-  listFeedbackForms, listFeedbackResponses, listQrConfigs, updateFeedbackForm,
+  analyzeFeedbackWithAi, countFeedbackResponses, createFeedbackForm, createQrConfig,
+  deleteFeedbackForm, listFeedbackForms, listFeedbackResponses, listQrConfigs,
+  updateFeedbackForm,
 } from '../../lib/api'
 import { publicQrUrl } from '../../lib/qr'
 import { QRCodeSVG } from 'qrcode.react'
@@ -12,7 +13,8 @@ import { Skeleton } from '../../components/ui/Skeleton'
 import { useToast } from '../../components/ui/Toast'
 import { useEvent } from './EventLayout'
 import type {
-  FeedbackForm, FeedbackQuestion, FeedbackQuestionType, FeedbackResponse, QrConfig,
+  AiFeedbackAnalysis, FeedbackForm, FeedbackQuestion, FeedbackQuestionType, FeedbackResponse,
+  QrConfig,
 } from '../../lib/types'
 
 // Event Manager feedback surface (ADR-0009): create forms, configure questions,
@@ -279,7 +281,6 @@ function FormEditor({ eventId, kind, form, onDone, onCancel }: {
   const [title, setTitle] = useState(form?.title ?? '')
   const [description, setDescription] = useState(form?.description ?? '')
   const [access, setAccess] = useState<FeedbackForm['access']>(form?.access ?? 'participants')
-  const [onePerUser, setOnePerUser] = useState(form?.one_response_per_user ?? true)
   const [questions, setQuestions] = useState<FeedbackQuestion[]>(form?.questions ?? [])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -310,13 +311,13 @@ function FormEditor({ eventId, kind, form, onDone, onCancel }: {
       if (form) {
         await updateFeedbackForm(form.id, {
           title: title.trim(), kind, description: description.trim(),
-          access, one_response_per_user: onePerUser, questions: clean,
+          access, one_response_per_user: false, questions: clean,
         })
         toast('success', 'Form updated')
       } else {
         await createFeedbackForm({
           event_id: eventId, title: title.trim(), kind, description: description.trim(),
-          access, one_response_per_user: onePerUser, questions: clean,
+          access, one_response_per_user: false, questions: clean,
         })
         toast('success', 'Form created')
       }
@@ -351,20 +352,11 @@ function FormEditor({ eventId, kind, form, onDone, onCancel }: {
           <option value="public">Public — anyone with the link or QR</option>
         </select>
       </label>
-      <label className="check">
-        <input type="checkbox" checked={onePerUser} onChange={(e) => setOnePerUser(e.target.checked)} />
-        One response per signed-in user
-      </label>
-      {access === 'public' && onePerUser && (
+      {kind === 'feedback' && (
         <p className="muted">
-          Anonymous public responses cannot be limited per person — the limit
-          applies to signed-in respondents.
-        </p>
-      )}
-      {onePerUser && (
-        <p className="muted">
-          When the form is opened for a specific team or participant (e.g. via a
-          scanned QR), the limit applies per person per target.
+          This is a generic form: one QR, one link, and respondents may answer as
+          many times as they like. Add a question such as “Which team is this
+          feedback about?” if you want responses to carry that context.
         </p>
       )}
 
@@ -447,6 +439,21 @@ function audienceOf(r: FeedbackResponse): Exclude<Audience, 'all'> {
 function ResponsesViewer({ form }: { form: FeedbackForm }) {
   const [responses, setResponses] = useState<FeedbackResponse[] | null>(null)
   const [audience, setAudience] = useState<Audience>('all')
+  const [analysis, setAnalysis] = useState<AiFeedbackAnalysis | null>(null)
+  const [aiBusy, setAiBusy] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
+
+  async function runAnalysis() {
+    setAiBusy(true)
+    setAiError(null)
+    try {
+      setAnalysis(await analyzeFeedbackWithAi(form.id))
+    } catch (err) {
+      setAiError(err instanceof Error ? err.message : 'AI analysis is temporarily unavailable.')
+    } finally {
+      setAiBusy(false)
+    }
+  }
 
   useEffect(() => {
     listFeedbackResponses(form.id).then(setResponses).catch(() => setResponses([]))
@@ -480,6 +487,23 @@ function ResponsesViewer({ form }: { form: FeedbackForm }) {
           before faculty segregation was added — neither can be classified.
         </p>
       )}
+      <div className="ai-panel print-hide">
+        <div className="row">
+          <button type="button" className="btn btn-ghost btn-sm" disabled={aiBusy} onClick={() => void runAnalysis()}>
+            <Sparkles size={14} aria-hidden /> {aiBusy ? 'Analyzing…' : analysis ? 'Re-run AI summary' : 'Summarize with AI'}
+          </button>
+          <span className="muted">
+            Sends only the answers (no names, emails or identities) to the AI
+            service and returns an organizer summary. Nothing is stored.
+          </span>
+        </div>
+        {aiError && (
+          <p className="form-error">
+            {aiError} — AI analysis is temporarily unavailable; the responses above are complete and readable as usual.
+          </p>
+        )}
+        {analysis && <FeedbackAnalysisView analysis={analysis} />}
+      </div>
       {shown.length === 0 ? (
         <p className="muted">No responses in this group.</p>
       ) : (
@@ -511,6 +535,32 @@ function ResponsesViewer({ form }: { form: FeedbackForm }) {
           </table>
         </div>
       )}
+    </div>
+  )
+}
+
+function FeedbackAnalysisView({ analysis }: { analysis: AiFeedbackAnalysis }) {
+  const list = (items: string[]) => items.length === 0
+    ? <p className="muted">—</p>
+    : <ul>{items.map((x, i) => <li key={i}>{x}</li>)}</ul>
+  return (
+    <div className="ai-analysis">
+      <p className="muted">
+        AI summary of {analysis.response_count} response{analysis.response_count === 1 ? '' : 's'}
+        {analysis.model ? ` · ${analysis.model}` : ''} — a reading aid, not a verdict.
+      </p>
+      <h4>Summary</h4>
+      <p>{analysis.summary}</p>
+      <h4>What went well</h4>{list(analysis.went_well)}
+      <h4>Common positive themes</h4>{list(analysis.positive_themes)}
+      <h4>What needs improvement</h4>{list(analysis.needs_improvement)}
+      <h4>Common complaints</h4>{list(analysis.complaints)}
+      <h4>Recommended actions</h4>
+      {analysis.recommended_actions.length === 0
+        ? <p className="muted">—</p>
+        : <ol>{analysis.recommended_actions.map((x, i) => <li key={i}>{x}</li>)}</ol>}
+      <h4>Priority recommendation</h4>
+      <p>{analysis.priority}</p>
     </div>
   )
 }

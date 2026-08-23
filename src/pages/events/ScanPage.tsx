@@ -104,10 +104,9 @@ export function ScanPage() {
       }
       const result = await performScan(current.id, t, action as QrAction)
       if (result.action === 'feedback' && result.status === 'ok' && result.form_id) {
-        // open the configured form pre-bound to the scanned target; the server
-        // enforces per-target dedupe on submission (00019)
-        const ti = result.team_id ?? result.participant_id ?? ''
-        navigate(`/f/${result.form_id}?tt=${result.kind ?? 'team'}&ti=${ti}&tn=${encodeURIComponent(result.name)}`)
+        // legacy configuration only (the action is no longer offered, 00022):
+        // feedback is generic, so just open the form — nothing is pre-bound
+        navigate(`/f/${result.form_id}`)
         return
       }
       if (result.action === 'scoring' && result.status === 'ok'

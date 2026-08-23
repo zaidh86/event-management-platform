@@ -91,6 +91,27 @@ export interface SubmissionConfig {
   instructions: string
   fields: RegistrationField[]
   results_visibility: 'hidden' | 'participants'
+  // AI-assisted judging (00022): when on, judges may request AI score
+  // suggestions for an entry. Suggestions are advisory — never the final score.
+  ai_assist: boolean
+}
+
+// Event table allocation (00022). Absent keys mean disabled — see
+// normalizeTableConfig in lib/tables.ts.
+export interface TableConfig {
+  enabled: boolean
+  start_number: number
+  label: string
+}
+
+// one allocated table per registration unit (solo participant or team)
+export interface EventTable {
+  id: string
+  event_id: string
+  participant_id: string | null
+  team_id: string | null
+  table_number: number
+  created_at: string
 }
 
 export interface Submission {
@@ -115,7 +136,11 @@ export interface JudgingCriterion {
   id: string
   event_id: string
   name: string
+  // human-facing evaluation guidance ("what does this criterion mean?")
   description: string
+  // what an AI should look for when suggesting a score (00022); absent on
+  // pre-00022 rows, empty = fall back to description
+  ai_instructions?: string
   max_score: number
   weight: number
   required: boolean
@@ -123,6 +148,25 @@ export interface JudgingCriterion {
   is_enabled: boolean
   created_at: string
   updated_at: string
+}
+
+// per-criterion AI suggestion (stored in judge_evaluations.details, 00022)
+export interface AiCriterionSuggestion {
+  criterion_id: string
+  criterion: string
+  suggested_score: number
+  max_score: number
+  reasoning: string
+  evidence: string[]
+}
+
+export interface AiJudgingDetails {
+  model?: string
+  generated_at?: string
+  summary?: string
+  strengths?: string[]
+  weaknesses?: string[]
+  suggestions?: AiCriterionSuggestion[]
 }
 
 export interface JudgeEvaluation {
@@ -133,9 +177,25 @@ export interface JudgeEvaluation {
   source: 'human' | 'ai'
   scores: Record<string, number>
   notes: string
+  // AI rows: structured reasoning/evidence (00022); human rows: {}
+  details?: AiJudgingDetails
   status: 'draft' | 'final'
   created_at: string
   updated_at: string
+}
+
+// organizer-facing AI feedback analysis (returned by the ai-service Edge
+// Function; never stored)
+export interface AiFeedbackAnalysis {
+  model?: string
+  response_count: number
+  summary: string
+  went_well: string[]
+  positive_themes: string[]
+  needs_improvement: string[]
+  complaints: string[]
+  recommended_actions: string[]
+  priority: string
 }
 
 export interface JudgingResult {
@@ -160,6 +220,7 @@ export interface EmpEvent {
   capabilities: EventCapabilities
   leaderboard_config: LeaderboardConfig
   submission_config: SubmissionConfig
+  table_config: TableConfig
   description: string
   status: EventStatus
   is_team_event: boolean
@@ -368,6 +429,7 @@ export interface FeedbackForm {
   questions: FeedbackQuestion[]
   status: 'draft' | 'published' | 'closed'
   access: 'public' | 'participants'
+  // no longer enforced since 00022 (generic feedback allows repeat responses)
   one_response_per_user: boolean
   created_by: string
   created_at: string
@@ -386,7 +448,8 @@ export interface FeedbackResponse {
   form_id: string
   event_id: string
   respondent_id: string | null
-  // what this response is ABOUT (00019); absent on pre-00019 rows
+  // 00019 target columns — retired in 00022 (feedback is generic); always
+  // 'event'/null on new rows, kept for historical rows only
   target_type?: 'event' | 'team' | 'participant'
   target_id?: string | null
   // absent on pre-00021 rows — see FeedbackRespondentCategory

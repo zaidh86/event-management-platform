@@ -4,9 +4,14 @@ import type { QrAction, QrConfig, QrTarget, ScannerAccess } from './types'
 // builder, the participant dashboard and the scan station. Validity rules
 // mirror the qr_configs CHECK constraints — the database remains the enforcer.
 
+// 'feedback' is offered ONLY on the feedback-form target: the form owns its
+// own generic QR (created from the Feedback page). Station QRs (participant /
+// team) no longer carry an "open feedback form" action — feedback is generic,
+// not bound to a scanned target (00022). The DB CHECK still tolerates legacy
+// rows; perform_scan's feedback branch is simply never offered.
 export const TARGET_ACTIONS: Record<QrTarget, QrAction[]> = {
-  participant: ['attendance', 'scoring', 'verification', 'feedback'],
-  team: ['scoring', 'verification', 'feedback'],
+  participant: ['attendance', 'scoring', 'verification'],
+  team: ['scoring', 'verification'],
   event: ['registration', 'info'],
   feedback: ['feedback'],
 }

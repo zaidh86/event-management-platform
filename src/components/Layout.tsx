@@ -1,11 +1,33 @@
 import { Link, Outlet, useNavigate } from 'react-router-dom'
 import { Suspense } from 'react'
-import { Settings } from 'lucide-react'
+import { Monitor, Moon, Settings, Sun } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import { useTheme, type ThemePref } from '../contexts/ThemeContext'
 import { platformRoleLabel } from '../lib/roles'
 
-// Theme selection lives in Settings → Appearance (single source of control);
-// the old topbar toggle was removed as a duplicate.
+// Theme selection for SIGNED-IN users lives in Settings → Appearance (single
+// source of control). Signed-out visitors have no Settings page, so the topbar
+// carries the same control for them — same ThemeContext, same persistence,
+// same three preferences; nothing is duplicated in state.
+const NEXT_PREF: Record<ThemePref, ThemePref> = { light: 'dark', dark: 'system', system: 'light' }
+const PREF_LABEL: Record<ThemePref, string> = { light: 'Light', dark: 'Dark', system: 'System' }
+
+function ThemeToggle() {
+  const { pref, setPref } = useTheme()
+  const Icon = pref === 'light' ? Sun : pref === 'dark' ? Moon : Monitor
+  const label = `Appearance: ${PREF_LABEL[pref]}. Switch to ${PREF_LABEL[NEXT_PREF[pref]]}.`
+  return (
+    <button
+      type="button"
+      className="btn btn-ghost btn-icon"
+      onClick={() => setPref(NEXT_PREF[pref])}
+      title={label}
+      aria-label={label}
+    >
+      <Icon size={16} aria-hidden />
+    </button>
+  )
+}
 
 export function AppLayout() {
   const { session, profile, signOut } = useAuth()
@@ -40,7 +62,10 @@ export function AppLayout() {
               </button>
             </>
           ) : (
-            <Link to="/login" className="btn btn-ghost">Sign in</Link>
+            <>
+              <ThemeToggle />
+              <Link to="/login" className="btn btn-ghost">Sign in</Link>
+            </>
           )}
         </nav>
       </header>

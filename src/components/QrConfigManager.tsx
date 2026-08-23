@@ -123,7 +123,7 @@ export function QrConfigManager({ event }: { event: EmpEvent }) {
       setError('Select who can use this QR operation')
       return
     }
-    if ((draft.target === 'feedback' || draft.actions.includes('feedback')) && !draft.feedback_form_id) {
+    if (draft.target === 'feedback' && !draft.feedback_form_id) {
       setError('Choose the feedback form the feedback action opens')
       return
     }
@@ -136,7 +136,7 @@ export function QrConfigManager({ event }: { event: EmpEvent }) {
         target: draft.target,
         actions: draft.actions,
         scanner_access: draft.scanner_access,
-        config: draft.target === 'feedback' || draft.actions.includes('feedback')
+        config: draft.target === 'feedback'
           ? { feedback_form_id: draft.feedback_form_id }
           : {},
       }
@@ -331,22 +331,6 @@ export function QrConfigManager({ event }: { event: EmpEvent }) {
             ))}
           </fieldset>
 
-          {draft.target !== 'feedback' && draft.actions.includes('feedback') && (
-            <label>
-              Feedback form (opened by the feedback action)
-              <select
-                value={draft.feedback_form_id}
-                onChange={(e) => setDraft((d) => d && { ...d, feedback_form_id: e.target.value })}
-              >
-                <option value="">Select a form…</option>
-                {forms.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.title}{f.status !== 'published' ? ` (${f.status})` : ''}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
           {error && <p className="form-error">{error}</p>}
           <div className="row">
             <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setDraft(null)}>

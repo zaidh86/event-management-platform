@@ -1,9 +1,10 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
-import { Gavel, ListChecks, Plus } from 'lucide-react'
+import { Gavel, ListChecks, Plus, Sparkles } from 'lucide-react'
 import {
-  createCriterion, deleteCriterion, getJudgingResults, getSubmissionDocumentUrl,
-  listCriteria, listMembers, listMyEvaluations, listSubmissionEvaluations,
-  listSubmissions, saveEvaluation, updateCriterion,
+  createCriterion, deleteCriterion, getAiEvaluation, getJudgingResults,
+  getSubmissionDocumentUrl, listCriteria, listMembers, listMyEvaluations,
+  listSubmissionEvaluations, listSubmissions, requestAiJudging, saveEvaluation,
+  updateCriterion,
 } from '../../lib/api'
 import { fmtDateTime } from '../../lib/format'
 import { supabase } from '../../lib/supabase'
@@ -13,7 +14,7 @@ import { Skeleton } from '../../components/ui/Skeleton'
 import { useToast } from '../../components/ui/Toast'
 import { useEvent } from './EventLayout'
 import type {
-  JudgeEvaluation, JudgingCriterion, JudgingResult, Submission,
+  AiCriterionSuggestion, JudgeEvaluation, JudgingCriterion, JudgingResult, Submission,
 } from '../../lib/types'
 
 // Judging (ADR-0011). Event Managers configure criteria and read results;
@@ -118,6 +119,7 @@ export function EvaluationEditor({ submissionId, criteria, existing, onSaved }: 
   existing: JudgeEvaluation | null
   onSaved: () => void
 }) {
+  const { event } = useEvent()
   const toast = useToast()
   const [detail, setDetail] = useState<Submission | null>(null)
   const [scores, setScores] = useState<Record<string, string>>(
@@ -126,12 +128,48 @@ export function EvaluationEditor({ submissionId, criteria, existing, onSaved }: 
   const [notes, setNotes] = useState(existing?.notes ?? '')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // AI assistance (00022): the stored source='ai' row for this entry, if any.
+  // Suggestions are advisory — the judge's own numbers are what get saved.
+  const aiEnabled = event.submission_config.ai_assist
+  const [ai, setAi] = useState<JudgeEvaluation | null>(null)
+  const [aiBusy, setAiBusy] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
 
   useEffect(() => {
     // the submission row itself (RLS admits judges for submitted entries)
     supabase.from('submissions').select('*').eq('id', submissionId).maybeSingle()
       .then(({ data }) => setDetail(data as Submission | null))
-  }, [submissionId])
+    if (aiEnabled) {
+      getAiEvaluation(submissionId).then(setAi).catch(() => {})
+    }
+  }, [submissionId, aiEnabled])
+
+  const suggestionFor = new Map<string, AiCriterionSuggestion>(
+    (ai?.details?.suggestions ?? []).map((s) => [s.criterion_id, s]),
+  )
+
+  async function runAi(force: boolean) {
+    setAiBusy(true)
+    setAiError(null)
+    try {
+      setAi(await requestAiJudging(submissionId, force))
+    } catch (err) {
+      setAiError(err instanceof Error ? err.message : 'AI analysis is temporarily unavailable.')
+    } finally {
+      setAiBusy(false)
+    }
+  }
+
+  function applySuggestions() {
+    setScores((s) => {
+      const next = { ...s }
+      for (const c of criteria) {
+        const sug = suggestionFor.get(c.id)
+        if (sug && (next[c.id] ?? '') === '') next[c.id] = String(sug.suggested_score)
+      }
+      return next
+    })
+  }
 
   async function save(finalize: boolean) {
     setBusy(true)
@@ -180,22 +218,77 @@ export function EvaluationEditor({ submissionId, criteria, existing, onSaved }: 
           )}
         </div>
       )}
+      {aiEnabled && (
+        <div className="ai-panel">
+          <div className="row">
+            <button
+              type="button" className="btn btn-ghost btn-sm" disabled={aiBusy}
+              onClick={() => void runAi(ai !== null)}
+            >
+              <Sparkles size={14} aria-hidden /> {aiBusy ? 'Analyzing…' : ai ? 'Re-run AI analysis' : 'Get AI suggestions'}
+            </button>
+            {ai && suggestionFor.size > 0 && (
+              <button type="button" className="btn btn-ghost btn-sm" onClick={applySuggestions}>
+                Fill empty scores with suggestions
+              </button>
+            )}
+            <span className="muted">
+              Advisory only — you decide every score; AI never counts toward results.
+            </span>
+          </div>
+          {aiError && (
+            <p className="form-error">
+              {aiError} — AI analysis is temporarily unavailable. You can continue with manual judging.
+            </p>
+          )}
+          {ai?.details?.summary && (
+            <div className="ai-suggestion">
+              <strong>AI summary{ai.details.model ? ` (${ai.details.model})` : ''}</strong>
+              <p>{ai.details.summary}</p>
+              {(ai.details.strengths?.length ?? 0) > 0 && (
+                <><em>Strengths</em><ul>{ai.details.strengths!.map((x, i) => <li key={i}>{x}</li>)}</ul></>
+              )}
+              {(ai.details.weaknesses?.length ?? 0) > 0 && (
+                <><em>Weaknesses</em><ul>{ai.details.weaknesses!.map((x, i) => <li key={i}>{x}</li>)}</ul></>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       {criteria.length === 0 && (
         <p className="muted">No judging criteria configured yet — ask the Event Manager.</p>
       )}
-      {criteria.map((c) => (
-        <div className="row eval-criterion" key={c.id}>
-          <label>
-            {c.name}{c.required && ' *'} <span className="muted">(0–{c.max_score}, weight ×{c.weight})</span>
-            <input
-              type="number" min={0} max={c.max_score} step="any"
-              value={scores[c.id] ?? ''}
-              onChange={(e) => setScores((s) => ({ ...s, [c.id]: e.target.value }))}
-            />
-          </label>
-          {c.description && <p className="muted eval-criterion-desc">{c.description}</p>}
-        </div>
-      ))}
+      {criteria.map((c) => {
+        const sug = suggestionFor.get(c.id)
+        return (
+          <div className="eval-criterion-card" key={c.id}>
+            <strong>{c.name}{c.required && ' *'}</strong>
+            {c.description
+              ? <p className="muted eval-criterion-desc">{c.description}</p>
+              : <p className="muted eval-criterion-desc">No guidance given — score this criterion on its name.</p>}
+            <div className="eval-score-row">
+              <label>
+                Score (0–{c.max_score})
+                <input
+                  type="number" min={0} max={c.max_score} step="any"
+                  value={scores[c.id] ?? ''}
+                  onChange={(e) => setScores((s) => ({ ...s, [c.id]: e.target.value }))}
+                />
+              </label>
+              <span className="muted">Max {c.max_score} · weight ×{c.weight} in the total</span>
+            </div>
+            {sug && (
+              <div className="ai-suggestion">
+                <strong>AI suggests {sug.suggested_score} / {sug.max_score}</strong>
+                <span>{sug.reasoning}</span>
+                {sug.evidence.length > 0 && (
+                  <ul>{sug.evidence.map((e, i) => <li key={i}>{e}</li>)}</ul>
+                )}
+              </div>
+            )}
+          </div>
+        )
+      })}
       <label>
         Private notes <span className="muted">(visible to you and Event Managers only)</span>
         <textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={4000} />
@@ -271,8 +364,10 @@ function ResultsSection({ eventId, judgeCount }: { eventId: string; judgeCount: 
     <section className="card stack">
       <h3>Results</h3>
       <p className="muted">
-        Ranked by weighted total (criterion averages across finalized evaluations ×
-        weight). Participant visibility: {event.submission_config.results_visibility === 'participants'
+        How totals work: for each criterion, the finalized human scores are
+        averaged across judges; that average × the criterion's weight is its
+        contribution, and the weighted total is the sum. AI suggestions never
+        count. Participant visibility: {event.submission_config.results_visibility === 'participants'
           ? 'participants can see aggregate results'
           : 'hidden — managers, judges and staff only'} (configure in Event settings).
         {draftCount > 0 && ` ${draftCount} draft submission${draftCount === 1 ? '' : 's'} not yet handed in.`}
@@ -408,47 +503,74 @@ function CriteriaSection({ eventId }: { eventId: string }) {
     <section className="card stack">
       <h3>Judging criteria</h3>
       <p className="muted">
-        Judges score each enabled criterion from 0 to its maximum; weights shape
-        the total. Removing a criterion removes it from future totals.
+        Each criterion is one thing judges score, from 0 to its <strong>maximum
+        score</strong>. The <strong>weight</strong> multiplies that criterion's
+        average when totals are computed (weight 2 counts twice as much as
+        weight 1; 0 shows the criterion but excludes it from totals).
+        The <strong>guidance</strong> is what a human judge reads; the
+        <strong> AI instructions</strong> tell the AI assistant what to look
+        for when suggesting a score (optional — it falls back to the guidance).
       </p>
       {criteria === null && <Skeleton lines={2} height="2.2rem" />}
-      {criteria?.map((c) => (
-        <div className="field-row criterion-row" key={c.id}>
-          <input
-            aria-label="Criterion name" value={c.name}
-            onBlur={(e) => { if (e.target.value !== c.name) void patch(c, { name: e.target.value }) }}
-            onChange={(e) => setCriteria((cs) => cs?.map((x) => x.id === c.id ? { ...x, name: e.target.value } : x) ?? null)}
-          />
-          <input
-            aria-label="Description" placeholder="Description (shown to judges)" value={c.description}
-            onBlur={(e) => { if (e.target.value !== c.description) void patch(c, { description: e.target.value }) }}
-            onChange={(e) => setCriteria((cs) => cs?.map((x) => x.id === c.id ? { ...x, description: e.target.value } : x) ?? null)}
-          />
-          <label className="crit-num">
-            Max
-            <input
-              type="number" min={1} step="any" value={c.max_score}
-              onChange={(e) => void patch(c, { max_score: Number(e.target.value) || 1 })}
-            />
-          </label>
-          <label className="crit-num">
-            Weight
-            <input
-              type="number" min={0} step="any" value={c.weight}
-              onChange={(e) => void patch(c, { weight: Number(e.target.value) })}
-            />
-          </label>
-          <label className="check">
-            <input type="checkbox" checked={c.required} onChange={(e) => void patch(c, { required: e.target.checked })} />
-            Required
-          </label>
-          <label className="check">
-            <input type="checkbox" checked={c.is_enabled} onChange={(e) => void patch(c, { is_enabled: e.target.checked })} />
-            Enabled
-          </label>
-          <button className="btn btn-ghost btn-sm" onClick={() => setConfirmDelete(c)}>Remove</button>
-        </div>
-      ))}
+      {criteria?.map((c) => {
+        const edit = (fields: Partial<JudgingCriterion>) =>
+          setCriteria((cs) => cs?.map((x) => x.id === c.id ? { ...x, ...fields } : x) ?? null)
+        return (
+          <div className="criterion-card card" key={c.id}>
+            <div className="criterion-line">
+              <label>
+                Criterion
+                <input
+                  value={c.name} maxLength={80}
+                  onBlur={(e) => { if (e.target.value !== c.name) void patch(c, { name: e.target.value }) }}
+                  onChange={(e) => edit({ name: e.target.value })}
+                />
+              </label>
+              <label className="crit-num">
+                Max score
+                <input
+                  type="number" min={1} step="any" value={c.max_score}
+                  onChange={(e) => void patch(c, { max_score: Number(e.target.value) || 1 })}
+                />
+              </label>
+              <label className="crit-num">
+                Weight
+                <input
+                  type="number" min={0} step="any" value={c.weight}
+                  onChange={(e) => void patch(c, { weight: Number(e.target.value) })}
+                />
+              </label>
+            </div>
+            <label>
+              Guidance for judges <span className="field-hint">what does this criterion mean? what does a high score look like?</span>
+              <textarea
+                rows={2} value={c.description} maxLength={1000}
+                onBlur={(e) => { if (e.target.value !== c.description) void patch(c, { description: e.target.value }) }}
+                onChange={(e) => edit({ description: e.target.value })}
+              />
+            </label>
+            <label>
+              AI instructions <span className="field-hint">what should the AI look for and how should it score it? (optional)</span>
+              <textarea
+                rows={2} value={c.ai_instructions ?? ''} maxLength={2000}
+                onBlur={(e) => { if (e.target.value !== (c.ai_instructions ?? '')) void patch(c, { ai_instructions: e.target.value }) }}
+                onChange={(e) => edit({ ai_instructions: e.target.value })}
+              />
+            </label>
+            <div className="criterion-line">
+              <label className="check">
+                <input type="checkbox" checked={c.required} onChange={(e) => void patch(c, { required: e.target.checked })} />
+                Required before a judge can finalize
+              </label>
+              <label className="check">
+                <input type="checkbox" checked={c.is_enabled} onChange={(e) => void patch(c, { is_enabled: e.target.checked })} />
+                Enabled
+              </label>
+              <button className="btn btn-ghost btn-sm" onClick={() => setConfirmDelete(c)}>Remove</button>
+            </div>
+          </div>
+        )
+      })}
       <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void add()}>
         <Plus size={14} aria-hidden /> Add criterion
       </button>

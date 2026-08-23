@@ -9,6 +9,7 @@ export function normalizeSubmissionConfig(raw: unknown): SubmissionConfig {
     instructions: typeof src.instructions === 'string' ? src.instructions : '',
     fields: Array.isArray(src.fields) ? (src.fields as RegistrationField[]) : [],
     results_visibility: src.results_visibility === 'participants' ? 'participants' : 'hidden',
+    ai_assist: src.ai_assist === true,
   }
 }
 

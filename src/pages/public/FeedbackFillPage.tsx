@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { CheckCircle2, Star } from 'lucide-react'
 import { getFeedbackForm, submitFeedback } from '../../lib/api'
 import { useAuth } from '../../contexts/AuthContext'
@@ -9,19 +9,12 @@ import type { FeedbackForm, FeedbackQuestion } from '../../lib/types'
 // Respondent-facing feedback form (/f/:formId). Visibility is RLS-scoped:
 // anonymous visitors only ever see published PUBLIC forms; signed-in event
 // members also see published participant forms. submit_feedback re-validates
-// everything server-side (publish state, access, required answers, dedupe).
+// everything server-side (publish state, access, required answers).
+//
+// Feedback is GENERIC (00022): one form, one QR, any number of responses —
+// the form's own questions carry context such as "which team is this about?".
 export function FeedbackFillPage() {
   const { formId } = useParams<{ formId: string }>()
-  // target binding (issue 9): a scanned team/participant QR opens the form
-  // pre-bound to that entity — tt/ti identify it, tn is display-only; the
-  // server re-validates the target and enforces per-target dedupe.
-  const [params] = useSearchParams()
-  const tt = params.get('tt')
-  const ti = params.get('ti')
-  const tn = params.get('tn')
-  const target = (tt === 'team' || tt === 'participant') && ti
-    ? { type: tt as 'team' | 'participant', id: ti }
-    : undefined
   const { session } = useAuth()
   const user = session?.user ?? null
   const [form, setForm] = useState<FeedbackForm | null>(null)
@@ -69,6 +62,11 @@ export function FeedbackFillPage() {
             ? (isReport ? 'Your event report has been recorded.' : 'Your feedback has been recorded.')
             : doneMessage ?? 'You have already submitted this form.'}
         </p>
+        {done === 'ok' && !isReport && (
+          <button type="button" className="btn btn-ghost" onClick={() => { setAnswers({}); setDone(null); setBusy(false) }}>
+            Submit another response
+          </button>
+        )}
       </div>
     )
   }
@@ -95,7 +93,7 @@ export function FeedbackFillPage() {
     setBusy(true)
     setError(null)
     try {
-      const result = await submitFeedback(form.id, answers, target)
+      const result = await submitFeedback(form.id, answers)
       setDone(result.status)
       setDoneMessage(result.message ?? null)
     } catch (err) {
@@ -108,11 +106,6 @@ export function FeedbackFillPage() {
     <div className="public-landing public-landing-form">
       {isReport && <p className="step-kicker">Event Report</p>}
       <h1>{form.title}</h1>
-      {target && (
-        <p className="feedback-target-chip">
-          About: <strong>{tn || (target.type === 'team' ? 'selected team' : 'selected participant')}</strong>
-        </p>
-      )}
       {form.description && <p className="muted">{form.description}</p>}
       <form className="stack card feedback-fill" onSubmit={(e) => void onSubmit(e)}>
         {form.questions.map((q) => (

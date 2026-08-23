@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../contexts/AuthContext'
+import { PasswordInput } from '../../components/ui/PasswordInput'
 
 // Landing page of the recovery email link. Supabase's redirect signs the user
 // into a recovery session (detectSessionInUrl); with that session present,
@@ -69,16 +70,16 @@ export function ResetPasswordPage() {
       <form onSubmit={(e) => void onSubmit(e)} className="stack">
         <label>
           New password
-          <input
-            type="password" value={password} minLength={8} required
+          <PasswordInput
+            value={password} minLength={8} required
             autoComplete="new-password"
             onChange={(e) => setPassword(e.target.value)}
           />
         </label>
         <label>
           Confirm new password
-          <input
-            type="password" value={confirm} minLength={8} required
+          <PasswordInput
+            value={confirm} minLength={8} required
             autoComplete="new-password"
             onChange={(e) => setConfirm(e.target.value)}
           />

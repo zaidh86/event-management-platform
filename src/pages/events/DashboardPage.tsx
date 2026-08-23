@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '../../contexts/AuthContext'
-import { Award, CheckCircle2, FileText, MessageSquare, Paperclip, User, UsersRound, Wallet } from 'lucide-react'
+import { Award, CheckCircle2, FileText, LayoutGrid, MessageSquare, Paperclip, User, UsersRound, Wallet } from 'lucide-react'
+import { QRCodeSVG } from 'qrcode.react'
 import {
-  createTeam, getAccountFor, getMyAttendance, getMySubmission,
+  createTeam, getAccountFor, getMyAttendance, getMyEventTable, getMySubmission,
   getSubmissionDocumentUrl, getTeam, joinTeam, listAccountTransactions,
   listCertificates, listFeedbackForms, listQrConfigs, listTeamMembers,
   listTeams, registerForEvent, removeSubmissionDocument, saveSubmission,
@@ -11,14 +12,15 @@ import {
 } from '../../lib/api'
 import { supabase } from '../../lib/supabase'
 import { fmtDateTime, fmtPoints, fmtSigned } from '../../lib/format'
-import { myQrConfigs } from '../../lib/qr'
+import { myQrConfigs, publicQrUrl } from '../../lib/qr'
+import { formatTable } from '../../lib/tables'
 import { deadlinePassed } from '../../lib/submissions'
 import { QRCard } from '../../components/QRCard'
 import { Skeleton } from '../../components/ui/Skeleton'
 import { StatTile } from '../../components/ui/StatTile'
 import { useEvent } from './EventLayout'
 import type {
-  Account, AttendanceRecord, Certificate, EmpEvent, FeedbackForm, Participant,
+  Account, AttendanceRecord, Certificate, EmpEvent, EventTable, FeedbackForm, Participant,
   ParticipationMode, QrConfig, Submission, Team, Transaction,
 } from '../../lib/types'
 
@@ -122,8 +124,8 @@ function RegisterFlow() {
         <h2>Register for {event.name}</h2>
         <form onSubmit={onFieldsNext} className="stack card">
           <label>
-            Display name
-            <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} required maxLength={60} />
+            Display name <span className="field-hint">Write your Full Name</span>
+            <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} required maxLength={60} autoComplete="name" />
           </label>
           {event.registration_fields.map((f) => (
             <label key={f.key}>
@@ -223,6 +225,8 @@ function ParticipantDashboard({ participant, refreshEvent, eventId }: {
   const [attendance, setAttendance] = useState<AttendanceRecord | null>(null)
   const [feedbackForms, setFeedbackForms] = useState<FeedbackForm[]>([])
   const [certificates, setCertificates] = useState<Certificate[]>([])
+  // event table allocation (00022): my unit's table — solo row or team row
+  const [myTable, setMyTable] = useState<EventTable | null>(null)
 
   const load = useCallback(async () => {
     let acc: Account | null = null
@@ -262,7 +266,10 @@ function ParticipantDashboard({ participant, refreshEvent, eventId }: {
       // RLS returns only the caller's own certificates here
       listCertificates(eventId).then(setCertificates).catch(() => {})
     }
-  }, [eventId, participant.id, event.capabilities.attendance, event.capabilities.feedback, event.capabilities.certificates])
+    if (event.table_config.enabled) {
+      getMyEventTable(eventId, participant).then(setMyTable).catch(() => {})
+    }
+  }, [eventId, participant, event.capabilities.attendance, event.capabilities.feedback, event.capabilities.certificates, event.table_config.enabled])
 
   // live balance + ledger updates for my account
   useEffect(() => {
@@ -381,6 +388,31 @@ function ParticipantDashboard({ participant, refreshEvent, eventId }: {
           )
         })()}
 
+        {event.table_config.enabled && (
+          <section className="card">
+            <h2>{isTeamMode ? 'Team table' : 'My table'}</h2>
+            {myTable ? (
+              <div className="table-allot">
+                <LayoutGrid size={28} aria-hidden />
+                <div>
+                  <div className="table-allot-number">{formatTable(event.table_config, myTable.table_number)}</div>
+                  <p className="muted">
+                    {isTeamMode
+                      ? `Your team is allotted ${formatTable(event.table_config, myTable.table_number)} — every member shares it.`
+                      : `You're allotted ${formatTable(event.table_config, myTable.table_number)}.`}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <p className="muted">
+                {needsTeam
+                  ? 'Your team receives a table the moment it is created.'
+                  : 'No table allotted yet — the organizers will assign one.'}
+              </p>
+            )}
+          </section>
+        )}
+
         {event.capabilities.attendance && (
           <section className="card">
             <h2>Attendance</h2>
@@ -409,6 +441,17 @@ function ParticipantDashboard({ participant, refreshEvent, eventId }: {
                 </li>
               ))}
             </ul>
+            {/* the form's own generic QR (created on the Feedback page) — the
+                same image the organizers print; participants can show it to
+                visitors so they can give feedback. Never team/person-specific. */}
+            {feedbackForms
+              .filter((f) => (f.kind ?? 'feedback') === 'feedback')
+              .map((f) => {
+                const cfg = (qrConfigs ?? []).find(
+                  (c) => c.is_enabled && c.target === 'feedback' && c.config.feedback_form_id === f.id,
+                )
+                return cfg ? <FeedbackQrCard key={f.id} form={f} token={cfg.qr_token} /> : null
+              })}
           </section>
         )}
 
@@ -462,6 +505,26 @@ function ParticipantDashboard({ participant, refreshEvent, eventId }: {
           </section>
         )}
       </div>
+    </div>
+  )
+}
+
+// the generic feedback-form QR, reused from the Feedback page (same token,
+// same /q/ landing URL) so a participant can hold it up for anyone to scan
+function FeedbackQrCard({ form, token }: { form: FeedbackForm; token: string }) {
+  const [open, setOpen] = useState(false)
+  const url = publicQrUrl(token)
+  return (
+    <div className="qr-public-preview">
+      <button type="button" className="btn btn-ghost btn-sm" onClick={() => setOpen((o) => !o)}>
+        {open ? 'Hide feedback QR' : `Show feedback QR — ${form.title}`}
+      </button>
+      {open && (
+        <div className="qr-public-box">
+          <QRCodeSVG value={url} size={180} marginSize={2} />
+          <p className="muted">Anyone who scans this opens the feedback form.</p>
+        </div>
+      )}
     </div>
   )
 }

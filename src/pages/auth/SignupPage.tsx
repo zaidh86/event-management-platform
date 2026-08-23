@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
+import { PasswordInput } from '../../components/ui/PasswordInput'
 
 export function SignupPage() {
   const [fullName, setFullName] = useState('')
@@ -38,7 +39,7 @@ export function SignupPage() {
       <h1>Create account</h1>
       <form onSubmit={(e) => void onSubmit(e)} className="stack">
         <label>
-          Full name
+          Full name <span className="field-hint">Write your Full Name</span>
           <input value={fullName} onChange={(e) => setFullName(e.target.value)} required autoComplete="name" />
         </label>
         <label>
@@ -47,8 +48,8 @@ export function SignupPage() {
         </label>
         <label>
           Password
-          <input
-            type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+          <PasswordInput
+            value={password} onChange={(e) => setPassword(e.target.value)}
             required minLength={8} autoComplete="new-password"
           />
         </label>

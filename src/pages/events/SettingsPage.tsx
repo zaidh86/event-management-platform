@@ -1,12 +1,16 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { createQrConfig, deleteEvent, listQrConfigs, updateEvent, uploadEventMedia } from '../../lib/api'
+import {
+  assignEventTables, clearEventTables, createQrConfig, deleteEvent, listEventTables, listParticipants,
+  listQrConfigs, listTeams, updateEvent, uploadEventMedia,
+} from '../../lib/api'
+import { formatTable } from '../../lib/tables'
 import { QrConfigManager } from '../../components/QrConfigManager'
 import { ConfirmDialog } from '../../components/ui/Dialog'
 import { useToast } from '../../components/ui/Toast'
 import { useEvent } from './EventLayout'
 import type {
-  EmpEvent, EventStatus, LeaderboardEntity, LeaderboardMetric,
+  EmpEvent, EventStatus, EventTable, LeaderboardEntity, LeaderboardMetric,
   LeaderboardVisibility, RegistrationField,
 } from '../../lib/types'
 
@@ -51,6 +55,13 @@ export function SettingsPage() {
   const [subInstructions, setSubInstructions] = useState(sc.instructions)
   const [subFields, setSubFields] = useState<RegistrationField[]>(sc.fields)
   const [subResults, setSubResults] = useState<'hidden' | 'participants'>(sc.results_visibility)
+  const [subAiAssist, setSubAiAssist] = useState(sc.ai_assist)
+
+  // event table allocation (00022)
+  const tc = event.table_config
+  const [tblEnabled, setTblEnabled] = useState(tc.enabled)
+  const [tblStart, setTblStart] = useState(tc.start_number)
+  const [tblLabel, setTblLabel] = useState(tc.label)
   // leaderboard configuration (ADR-0008) — event.leaderboard_config is already
   // normalized at the api boundary, so these initial values are always present
   const [lbEnabled, setLbEnabled] = useState(event.leaderboard_config.enabled)
@@ -130,6 +141,12 @@ export function SettingsPage() {
               options: f.type === 'select' ? (f.options ?? []).filter((o) => o.trim() !== '') : undefined,
             })),
           results_visibility: subResults,
+          ai_assist: capJudging && subAiAssist,
+        },
+        table_config: {
+          enabled: tblEnabled,
+          start_number: Math.max(1, Math.floor(Number(tblStart) || 1)),
+          label: tblLabel.trim() || 'Table',
         },
         leaderboard_config: {
           enabled: lbEnabledFinal,
@@ -437,6 +454,19 @@ export function SettingsPage() {
               />
             </label>
             {capJudging && (
+              <label className="check">
+                <input type="checkbox" checked={subAiAssist} onChange={(e) => setSubAiAssist(e.target.checked)} />
+                AI-assisted judging — judges may request AI score suggestions per entry
+              </label>
+            )}
+            {capJudging && subAiAssist && (
+              <p className="muted">
+                Suggestions are advisory: judges review and may change every score,
+                and only finalized human evaluations count toward results. Requires
+                the ai-service Edge Function to be deployed with a provider key.
+              </p>
+            )}
+            {capJudging && (
               <label>
                 Results visibility
                 <select value={subResults} onChange={(e) => setSubResults(e.target.value as 'hidden' | 'participants')}>
@@ -491,6 +521,35 @@ export function SettingsPage() {
             </button>
           </section>
         )}
+
+        <section className="card stack">
+          <h3>Table allocation</h3>
+          <p className="muted">
+            Give each registration a table number in registration order: a solo
+            participant gets the next table when they register; a team gets one
+            when it is created, shared by all its members.
+          </p>
+          <label className="check">
+            <input type="checkbox" checked={tblEnabled} onChange={(e) => setTblEnabled(e.target.checked)} />
+            Allot tables automatically at registration
+          </label>
+          {tblEnabled && (
+            <div className="row">
+              <label>
+                Label
+                <input value={tblLabel} maxLength={24} onChange={(e) => setTblLabel(e.target.value)} placeholder="Table" />
+              </label>
+              <label>
+                First number
+                <input type="number" min={1} step={1} value={tblStart} onChange={(e) => setTblStart(Number(e.target.value))} />
+              </label>
+            </div>
+          )}
+          {tblEnabled && event.table_config.enabled && <TableAllocationPanel event={event} />}
+          {tblEnabled && !event.table_config.enabled && (
+            <p className="muted">Save to enable; you can then allot tables to participants who already registered.</p>
+          )}
+        </section>
 
         <section className="card stack">
           <h3>Branding</h3>
@@ -583,6 +642,103 @@ export function SettingsPage() {
           authority: platform admins, or club admins of this event's club — mirroring
           the events_delete RLS policy. Plain organizers configure but never delete. */}
       {isClubAdmin && <DangerZone event={event} />}
+    </div>
+  )
+}
+
+// manager view of the allocation list + backfill for units registered before
+// the feature was switched on. All authorization is in the database.
+function TableAllocationPanel({ event }: { event: EmpEvent }) {
+  const toast = useToast()
+  const [rows, setRows] = useState<EventTable[] | null>(null)
+  const [names, setNames] = useState<Record<string, string>>({})
+  const [busy, setBusy] = useState(false)
+  const [confirmClear, setConfirmClear] = useState(false)
+
+  async function load() {
+    try {
+      const [tables, participants, teams] = await Promise.all([
+        listEventTables(event.id),
+        listParticipants(event.id),
+        listTeams(event.id),
+      ])
+      const map: Record<string, string> = {}
+      for (const p of participants) map[`p:${p.id}`] = p.display_name
+      for (const t of teams) map[`t:${t.id}`] = t.name
+      setNames(map)
+      setRows(tables)
+    } catch {
+      setRows([])
+    }
+  }
+  useEffect(() => { void load() }, [event.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function assign() {
+    setBusy(true)
+    try {
+      const n = await assignEventTables(event.id)
+      toast('success', n === 0 ? 'Everyone already has a table' : `${n} table${n === 1 ? '' : 's'} allotted`)
+      await load()
+    } catch (err) {
+      toast('error', err instanceof Error ? err.message : 'Could not allot tables')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function clearAll() {
+    setBusy(true)
+    try {
+      await clearEventTables(event.id)
+      toast('success', 'Table allocations cleared')
+      setConfirmClear(false)
+      await load()
+    } catch (err) {
+      toast('error', err instanceof Error ? err.message : 'Could not clear tables')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="stack">
+      <div className="row">
+        <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void assign()}>
+          Allot tables to unassigned registrations
+        </button>
+        {rows && rows.length > 0 && (
+          <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setConfirmClear(true)}>
+            Clear all
+          </button>
+        )}
+      </div>
+      {rows === null && <p className="muted">Loading…</p>}
+      {rows !== null && rows.length === 0 && <p className="muted">No tables allotted yet.</p>}
+      {rows !== null && rows.length > 0 && (
+        <ul className="table-list">
+          {rows.map((r) => (
+            <li key={r.id}>
+              <strong>{formatTable(event.table_config, r.table_number)}</strong>
+              <span>
+                {r.team_id ? (names[`t:${r.team_id}`] ?? 'Team') : (names[`p:${r.participant_id}`] ?? 'Participant')}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <ConfirmDialog
+        open={confirmClear}
+        title="Clear all table allocations?"
+        confirmLabel="Clear tables"
+        busy={busy}
+        onConfirm={() => void clearAll()}
+        onCancel={() => setConfirmClear(false)}
+      >
+        <p className="muted">
+          Every participant and team loses their table number. Re-allotting
+          afterwards numbers everyone again in registration order.
+        </p>
+      </ConfirmDialog>
     </div>
   )
 }

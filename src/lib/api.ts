@@ -3,9 +3,10 @@ import { supabase } from './supabase'
 import { normalizeCapabilities } from './capabilities'
 import { normalizeLeaderboardConfig } from './leaderboard'
 import { normalizeSubmissionConfig } from './submissions'
+import { normalizeTableConfig } from './tables'
 import type {
-  Activity, Announcement, AttendanceRecord, Club, ClubMember, ClubRole, EmpEvent,
-  EventMember, FeedbackForm, FeedbackResponse, JudgeEvaluation, JudgingCriterion,
+  Activity, AiFeedbackAnalysis, Announcement, AttendanceRecord, Club, ClubMember, ClubRole, EmpEvent,
+  EventMember, EventTable, FeedbackForm, FeedbackResponse, JudgeEvaluation, JudgingCriterion,
   JudgingResult, LeaderboardRow, Participant, ParticipantRemovalResult,
   ParticipationMode, Profile,
   PublicQrResolution, QrAction, QrConfig, QrResolution, ScanOutcome, ScanRecord,
@@ -31,6 +32,7 @@ function toEvent(row: Record<string, unknown>): EmpEvent {
     // rows from a live DB that predates 00015 lack the column
     is_featured: row.is_featured === true,
     submission_config: normalizeSubmissionConfig(row.submission_config),
+    table_config: normalizeTableConfig(row.table_config),
   }
 }
 
@@ -549,16 +551,15 @@ export async function deleteFeedbackForm(id: string): Promise<void> {
   }
 }
 
-// target = what the response is ABOUT (the event itself, a team, or a
-// participant). Dedupe is per respondent per target, enforced server-side.
+// Generic feedback (00022): one configurable form, any number of responses per
+// respondent — the form's own questions carry context ("which team?").
+// Validation (publish state, access, required answers) and respondent
+// categorization are server-side.
 export async function submitFeedback(
   formId: string, answers: Record<string, unknown>,
-  target?: { type: 'team' | 'participant'; id: string },
 ): Promise<{ status: 'ok' | 'duplicate'; message?: string }> {
   const { data, error } = await supabase.rpc('submit_feedback', {
     p_form_id: formId, p_answers: answers,
-    p_target_type: target?.type ?? 'event',
-    p_target_id: target?.id ?? null,
   })
   throwIf(error)
   return data as { status: 'ok' | 'duplicate'; message?: string }
@@ -577,6 +578,43 @@ export async function listFeedbackResponses(formId: string): Promise<FeedbackRes
     .order('created_at', { ascending: false })
   throwIf(error)
   return (data ?? []) as FeedbackResponse[]
+}
+
+// ---- event tables (00022) ------------------------------------------------------
+
+// RLS: every event member may read the allocation list
+export async function listEventTables(eventId: string): Promise<EventTable[]> {
+  const { data, error } = await supabase
+    .from('event_tables').select('*').eq('event_id', eventId).order('table_number')
+  throwIf(error)
+  return (data ?? []) as EventTable[]
+}
+
+// the caller's own unit: their solo row, or their team's row
+export async function getMyEventTable(
+  eventId: string, participant: Participant,
+): Promise<EventTable | null> {
+  if (participant.participation_mode === 'team' && !participant.team_id) return null
+  const q = supabase.from('event_tables').select('*').eq('event_id', eventId)
+  const { data, error } = participant.participation_mode === 'team'
+    ? await q.eq('team_id', participant.team_id!).maybeSingle()
+    : await q.eq('participant_id', participant.id).maybeSingle()
+  throwIf(error)
+  return data as EventTable | null
+}
+
+// manager backfill: allocate tables to units registered before the feature
+// was enabled (server-authorized; idempotent). Returns the number assigned.
+export async function assignEventTables(eventId: string): Promise<number> {
+  const { data, error } = await supabase.rpc('assign_event_tables', { p_event_id: eventId })
+  throwIf(error)
+  return Number(data ?? 0)
+}
+
+// managers only (RLS delete policy); a no-op for anyone else
+export async function clearEventTables(eventId: string): Promise<void> {
+  const { error } = await supabase.from('event_tables').delete().eq('event_id', eventId)
+  throwIf(error)
 }
 
 // ---- submissions & judging (ADR-0011) ----------------------------------------
@@ -722,6 +760,59 @@ export async function saveEvaluation(input: {
   })
   throwIf(error)
   return data as JudgeEvaluation
+}
+
+// the stored AI suggestion row for one entry (RLS: judges/organizers of the
+// event, 00022); null when no analysis has been generated yet
+export async function getAiEvaluation(submissionId: string): Promise<JudgeEvaluation | null> {
+  const { data, error } = await supabase
+    .from('judge_evaluations').select('*')
+    .eq('submission_id', submissionId).eq('source', 'ai').maybeSingle()
+  throwIf(error)
+  return data as JudgeEvaluation | null
+}
+
+// ---- AI service (ai-service Edge Function; ADR-0015) ---------------------------
+// The provider key never reaches the browser: every call goes through the
+// Edge Function, which authenticates the caller with their own JWT and
+// re-checks authorization server-side. Errors surface as plain messages so
+// the UI can fall back to manual judging / manual reading.
+
+async function invokeAi<T>(body: Record<string, unknown>): Promise<T> {
+  const { data, error } = await supabase.functions.invoke('ai-service', { body })
+  if (error) {
+    // non-2xx responses are wrapped; surface the function's own message when present
+    const ctx = (error as { context?: Response }).context
+    let message = error.message || 'AI service unavailable'
+    if (ctx && typeof ctx.json === 'function') {
+      try {
+        const payload = await ctx.json() as { error?: string }
+        if (payload?.error) message = payload.error
+      } catch { /* not JSON */ }
+    }
+    throw new Error(message)
+  }
+  const payload = data as ({ error?: string } & T) | null
+  if (!payload) throw new Error('AI service returned nothing')
+  if (payload.error) throw new Error(payload.error)
+  return payload
+}
+
+// analyze a submitted entry (description + PDF) against the event's criteria
+// and store the suggestion as the entry's source='ai' evaluation row
+export async function requestAiJudging(submissionId: string, force = false): Promise<JudgeEvaluation> {
+  const res = await invokeAi<{ evaluation: JudgeEvaluation }>({
+    task: 'suggest_scores', submission_id: submissionId, force,
+  })
+  return res.evaluation
+}
+
+// organizer-facing summary of a form's responses (not stored)
+export async function analyzeFeedbackWithAi(formId: string): Promise<AiFeedbackAnalysis> {
+  const res = await invokeAi<{ analysis: AiFeedbackAnalysis }>({
+    task: 'analyze_feedback', form_id: formId,
+  })
+  return res.analysis
 }
 
 export async function getJudgingResults(eventId: string): Promise<JudgingResult[]> {

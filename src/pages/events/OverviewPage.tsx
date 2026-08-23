@@ -4,7 +4,20 @@ import { supabase } from '../../lib/supabase'
 import { fmtDateTime } from '../../lib/format'
 import { LifecyclePanel } from '../../components/LifecyclePanel'
 import { useEvent } from './EventLayout'
-import type { Announcement } from '../../lib/types'
+import type { Announcement, EmpEvent } from '../../lib/types'
+
+// every ENABLED participation mode, from the capability flags (ADR-0007) —
+// never from is_team_event alone, which hides Solo on Solo + Team events
+function participationLabel(event: EmpEvent): string {
+  const modes: string[] = []
+  if (event.capabilities.solo) modes.push('Solo')
+  if (event.capabilities.teams) {
+    modes.push(event.team_size_min === event.team_size_max
+      ? `Team of ${event.team_size_max}`
+      : `Team of ${event.team_size_min}–${event.team_size_max}`)
+  }
+  return modes.length > 0 ? modes.join(' / ') : 'Not accepting participants'
+}
 
 export function OverviewPage() {
   const { event, isOrganizer, role, canManageEvent } = useEvent()
@@ -50,8 +63,8 @@ export function OverviewPage() {
         <section className="card">
           <h2>Event info</h2>
           <dl className="info-list">
-            <dt>Format</dt>
-            <dd>{event.is_team_event ? `Teams of ${event.team_size_min}–${event.team_size_max}` : 'Individual'}</dd>
+            <dt>Participation</dt>
+            <dd>{participationLabel(event)}</dd>
             {event.capabilities.points && (
               <>
                 <dt>Scoring unit</dt>
