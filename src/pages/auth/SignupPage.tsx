@@ -29,8 +29,10 @@ export function SignupPage() {
     if (data.session) {
       navigate('/', { replace: true })
     } else {
-      // email confirmation enabled on the Supabase project
-      setNotice('Check your email to confirm your account, then log in.')
+      // TEMP (email confirmation disabled for the event): no "check your
+      // email" prompt. To revert when confirmation is re-enabled, restore:
+      //   setNotice('Check your email to confirm your account, then log in.')
+      setNotice('Account created successfully. You can now log in.')
     }
   }
 
