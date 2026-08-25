@@ -6,6 +6,7 @@ import { normalizeSubmissionConfig } from './submissions'
 import { normalizeTableConfig } from './tables'
 import type {
   Activity, AiFeedbackAnalysis, Announcement, AttendanceRecord, Club, ClubMember, ClubRole, EmpEvent,
+  EventReportAnalysis, EventReportAnalysisCriterion,
   EventMember, EventTable, FeedbackForm, FeedbackResponse, JudgeEvaluation, JudgingCriterion,
   JudgingResult, LeaderboardRow, Participant, ParticipantRemovalResult,
   ParticipationMode, Profile,
@@ -847,6 +848,83 @@ export async function requestAiJudging(submissionId: string, force = false): Pro
     task: 'suggest_scores', submission_id: submissionId, force,
   })
   return res.evaluation
+}
+
+// ---- Event Report AI Analysis (00025) ------------------------------------------
+// Its criteria are a SEPARATE system from judging_criteria: club authority
+// (super_admin / club_admin / convener) configures them on the Analytics page,
+// RLS gates every command on is_club_admin(event's club), and only the
+// analyze_report task reads them. Judging never sees this table and this
+// feature never reads judging_criteria.
+
+export async function listReportCriteria(eventId: string): Promise<EventReportAnalysisCriterion[]> {
+  const { data, error } = await supabase
+    .from('event_report_analysis_criteria').select('*').eq('event_id', eventId)
+    .order('sort_order').order('created_at')
+  throwIf(error)
+  return (data ?? []) as EventReportAnalysisCriterion[]
+}
+
+export async function createReportCriterion(fields: Partial<EventReportAnalysisCriterion> & {
+  event_id: string; name: string
+}): Promise<EventReportAnalysisCriterion> {
+  const { data, error } = await supabase
+    .from('event_report_analysis_criteria').insert(fields).select().single()
+  throwIf(error)
+  return data as EventReportAnalysisCriterion
+}
+
+export async function updateReportCriterion(
+  id: string, fields: Partial<EventReportAnalysisCriterion>,
+): Promise<EventReportAnalysisCriterion> {
+  const { data, error } = await supabase
+    .from('event_report_analysis_criteria').update(fields).eq('id', id).select().single()
+  throwIf(error)
+  return data as EventReportAnalysisCriterion
+}
+
+export async function deleteReportCriterion(id: string): Promise<void> {
+  const { data, error } = await supabase
+    .from('event_report_analysis_criteria').delete().eq('id', id).select('id')
+  throwIf(error)
+  if (!data || data.length === 0) {
+    throw new Error('Criterion was not deleted — you do not have permission.')
+  }
+}
+
+// Club authority only (super_admin / club_admin / convener — is_club_admin);
+// storage RLS and the Edge Function both enforce it server-side. The report
+// lives under reports/{event}/ in the PRIVATE submission-docs bucket (PDF
+// only, 10 MB — the bucket enforces both) and the analysis is returned to the
+// caller, never written into judging.
+
+export function eventReportPath(eventId: string, fileName: string): string {
+  const safe = fileName.toLowerCase().replace(/\.pdf$/i, '').replace(/[^a-z0-9._-]+/g, '-').slice(0, 60) || 'report'
+  return `reports/${eventId}/${safe}-${Date.now()}.pdf`
+}
+
+export async function uploadEventReport(eventId: string, file: File): Promise<{ path: string; name: string }> {
+  const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+  if (!isPdf) throw new Error('Only PDF documents are supported for report analysis.')
+  if (file.size > SUBMISSION_DOC_MAX_BYTES) throw new Error('This PDF is too large — the limit is 10 MB.')
+  const path = eventReportPath(eventId, file.name)
+  const { error } = await supabase.storage
+    .from('submission-docs')
+    .upload(path, file, { upsert: true, contentType: 'application/pdf' })
+  throwIf(error)
+  return { path, name: file.name }
+}
+
+export async function removeEventReport(path: string): Promise<void> {
+  const { error } = await supabase.storage.from('submission-docs').remove([path])
+  throwIf(error)
+}
+
+export async function analyzeEventReport(eventId: string, documentPath: string): Promise<EventReportAnalysis> {
+  const res = await invokeAi<{ analysis: EventReportAnalysis }>({
+    task: 'analyze_report', event_id: eventId, document_path: documentPath,
+  })
+  return res.analysis
 }
 
 // organizer-facing summary of a form's responses (not stored)

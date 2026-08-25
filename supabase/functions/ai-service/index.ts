@@ -29,7 +29,8 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import {
-  AiError, analyzeFeedback, analyzeSubmission, bytesToBase64, loadProviderChain, runWithFallback,
+  AiError, analyzeFeedback, analyzeReport, analyzeSubmission, bytesToBase64,
+  loadProviderChain, runWithFallback,
   type Attachment, type CriterionSpec,
 } from "../_shared/ai.ts";
 
@@ -81,6 +82,9 @@ Deno.serve(async (req) => {
     }
     if (body.task === "analyze_feedback") {
       return await feedbackSummary(asCaller, service, body);
+    }
+    if (body.task === "analyze_report") {
+      return await reportAnalysis(asCaller, service, body);
     }
     return json({ error: `Unknown task "${body.task}"` }, 400);
   } catch (e) {
@@ -213,6 +217,94 @@ async function suggestScores(asCaller: Client, service: Client, body: Record<str
     return json({ error: "The suggestion was generated but could not be stored." }, 500);
   }
   return json({ evaluation: row.data, cached: false });
+}
+
+// ---- analyze_report (00025) ----------------------------------------------------------------
+// Event Report review for CLUB AUTHORITY only (super_admin / club_admin /
+// convener = is_club_admin, the 00021 chokepoint — deliberately NOT
+// can_manage_event, so a plain organizer does not qualify). The criteria come
+// from event_report_analysis_criteria — the feature's OWN table — NEVER from
+// judging_criteria; the two systems are architecturally separate. The result
+// goes back to the caller and is NEVER written to judge_evaluations: official
+// judging stays human.
+
+const REPORT_PATH = /^reports\/[0-9a-fA-F-]{36}\/[A-Za-z0-9._-]{1,120}\.pdf$/;
+
+async function reportAnalysis(asCaller: Client, service: Client, body: Record<string, unknown>) {
+  const eventId = String(body.event_id ?? "");
+  const documentPath = String(body.document_path ?? "");
+  if (!/^[0-9a-f-]{36}$/i.test(eventId)) return json({ error: "event_id is required" }, 400);
+  if (!REPORT_PATH.test(documentPath) || split1(documentPath) !== eventId.toLowerCase()) {
+    return json({ error: "Invalid report path" }, 400);
+  }
+
+  // authorize with the CALLER's permissions: the event's club, then the one
+  // club-authority predicate. No service-role reads before this passes.
+  const { data: ev, error: evErr } = await asCaller
+    .from("events").select("id,club_id,name").eq("id", eventId).maybeSingle();
+  if (evErr || !ev) return json({ error: "Event not found or not accessible" }, 404);
+  const { data: authorized } = await asCaller.rpc("is_club_admin", { p_club_id: ev.club_id });
+  if (authorized !== true) {
+    return json({ error: "Only club administrators and conveners can run Event Report analysis" }, 403);
+  }
+
+  // the report document, from the PRIVATE bucket, server-side
+  const { data: file, error: dlErr } = await service.storage
+    .from("submission-docs").download(documentPath);
+  if (dlErr || !file) return json({ error: "The report document could not be read — upload it first." }, 404);
+  if (file.size > PDF_MAX_BYTES) return json({ error: "The report is too large for AI analysis (10 MB limit)." }, 400);
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (bytes.length < 5 || String.fromCharCode(...bytes.subarray(0, 5)) !== "%PDF-") {
+    return json({ error: "The report document is not a valid PDF." }, 400);
+  }
+  const attachment: Attachment = { mime: "application/pdf", base64: bytesToBase64(bytes), name: "report.pdf" };
+
+  // the feature's OWN criteria table — enabled rows only, read fresh every
+  // run. judging_criteria is deliberately never consulted here.
+  const { data: criteriaRows } = await service
+    .from("event_report_analysis_criteria")
+    .select("id,name,description,ai_instructions,max_score,weight")
+    .eq("event_id", eventId).eq("is_enabled", true).order("sort_order");
+  const rows = (criteriaRows ?? []) as Record<string, unknown>[];
+  if (rows.length === 0) {
+    return json({ error: "No Event Report Analysis criteria are configured for this event yet — add them above the upload." }, 400);
+  }
+  const aiCriteria: CriterionSpec[] = rows.map((c) => ({
+    id: String(c.id), name: String(c.name), description: String(c.description ?? ""),
+    ai_instructions: String(c.ai_instructions ?? ""), max_score: Number(c.max_score),
+  }));
+
+  const chain = loadProviderChain();
+  const { result: analysis, provider } = await runWithFallback(chain, true, (cfg) =>
+    analyzeReport(cfg, String(ev.name), attachment, aiCriteria), Date.now() + REQUEST_BUDGET_MS);
+
+  // one entry per enabled analysis criterion, in configured order
+  const byId = new Map(analysis.suggestions.map((s) => [s.criterion_id, s]));
+  const criteria = rows.map((c) => {
+    const id = String(c.id);
+    const s = byId.get(id);
+    return {
+      criterion_id: id,
+      criterion: String(c.name),
+      max_score: Number(c.max_score),
+      weight: Number(c.weight),
+      ...(s ? { suggested_score: s.suggested_score, reasoning: s.reasoning, evidence: s.evidence } : {}),
+    };
+  });
+
+  return json({
+    analysis: {
+      model: provider.model,
+      summary: analysis.summary,
+      strengths: analysis.strengths,
+      weaknesses: analysis.weaknesses,
+      criteria,
+    },
+  });
+}
+
+function split1(path: string): string {
+  return path.split("/")[1]?.toLowerCase() ?? "";
 }
 
 // ---- analyze_feedback ---------------------------------------------------------------------

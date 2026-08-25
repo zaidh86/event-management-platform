@@ -345,7 +345,72 @@ test('API keys never appear in logs or surfaced error messages across a full fai
   } finally { restoreLogs() }
 })
 
+// ---- Event Report analysis (00025) --------------------------------------------------------
+
+test('report analysis: generic over the caller-supplied criteria; report framing; no invented criteria', async () => {
+  fullEnv()
+  // the caller passes ONLY report-analysis criteria — the prompt contains
+  // exactly those and nothing else (no judging fallback of any kind)
+  const reportCriteria = [{ id: 'r1', name: 'Report clarity', description: 'd', ai_instructions: 'look at structure', max_score: 5 }]
+  const { system, user } = ai.buildReportPrompt('Informatique Exhib', reportCriteria)
+  assert.ok(/EVENT REPORT/.test(system))
+  assert.ok(/never claim to have seen or heard anything live/i.test(system), 'no live-presentation claims')
+  assert.ok(/QUALITY OF THE WRITTEN/i.test(system), 'presentation criteria = written explanation quality only')
+  assert.ok(/UNTRUSTED/.test(system), 'report document treated as untrusted input')
+  assert.ok(user.includes('"criterion_id": "r1"'))
+  assert.equal(user.includes('"criterion_id": "c1"'), false, 'no criteria beyond the supplied array')
+
+  // model volunteers a score for a criterion that was never supplied — dropped
+  scriptFetch([{ body: geminiOk({ summary: 's', strengths: [], weaknesses: [], suggestions: [
+    { criterion_id: 'r1', criterion: 'Report clarity', suggested_score: 4, max_score: 5, reasoning: 'r', evidence: [] },
+    { criterion_id: 'c1', criterion: 'Tech', suggested_score: 30, max_score: 30, reasoning: 'invented', evidence: [] },
+  ] }) }])
+  const [g] = ai.loadProviderChain()
+  const result = await ai.analyzeReport(g, 'E', pdf, reportCriteria)
+  assert.deepEqual(result.suggestions.map((s) => s.criterion_id), ['r1'], 'invented criteria are dropped by the validator')
+  assert.equal(result.suggestions[0].suggested_score, 4)
+
+  // no analysis criteria configured → clean input error, ZERO provider calls
+  const calls = scriptFetch([])
+  await assert.rejects(ai.analyzeReport(g, 'E', pdf, []), (e) => e.kind === 'input' && /No Event Report Analysis criteria/.test(e.message))
+  assert.equal(calls.length, 0)
+})
+
+test('report analysis rides the same fallback chain and validation', async () => {
+  fullEnv()
+  const calls = scriptFetch([{ status: 429, body: '' }, { body: openaiOk({ summary: 's', strengths: [], weaknesses: [], suggestions: [
+    { criterion_id: 'c1', criterion: 'Tech', suggested_score: 99, max_score: 30, reasoning: 'r', evidence: [] },
+  ] }) }])
+  const { result, provider } = await ai.runWithFallback(ai.loadProviderChain(), true, (cfg) =>
+    ai.analyzeReport(cfg, 'E', pdf, [criteria[0]]))
+  assert.equal(provider.label, 'fallback1'); assert.equal(calls.length, 2)
+  assert.equal(result.suggestions[0].suggested_score, 30, 'clamped to max by the shared validator')
+})
+
 // ---- human/AI separation (static guarantees of the Edge Function) -------------------------
+
+test('ai-service: the two criterion systems never cross; analyze_report is club-authority-only and never writes evaluations', () => {
+  const fn = readFileSync(new URL('supabase/functions/ai-service/index.ts', ROOT), 'utf8')
+  const start = fn.indexOf('async function reportAnalysis')
+  const end = fn.indexOf('function split1')
+  assert.ok(start > 0 && end > start)
+  const body = fn.slice(start, end)
+  // report analysis reads ONLY its own table
+  assert.ok(/from\("event_report_analysis_criteria"\)/.test(body), 'report analysis reads its own criteria table')
+  assert.equal(/from\("judging_criteria"\)/.test(body), false, 'report analysis NEVER queries judging_criteria (comments may mention it)')
+  assert.ok(/is_enabled/.test(body), 'disabled analysis criteria excluded')
+  // authorization + safety
+  assert.ok(/rpc\("is_club_admin"/.test(body), 'club-authority chokepoint used')
+  assert.equal(/rpc\("can_manage_event"/.test(body) || /can_manage_event\(/.test(body), false, 'plain organizers are NOT admitted')
+  assert.equal(/from\("judge_evaluations"\)/.test(body), false, 'analysis is never stored as an evaluation')
+  assert.ok(/REPORT_PATH\.test\(documentPath\)/.test(fn), 'path shape validated before any read')
+  assert.ok(/%PDF-/.test(body), 'magic-byte validation')
+  // normal judging reads ONLY judging_criteria, restored to pre-feature form
+  const ss = fn.slice(fn.indexOf('async function suggestScores'), start)
+  assert.ok(/from\("judging_criteria"\)/.test(ss), 'judging still reads judging_criteria')
+  assert.equal(/from\("event_report_analysis_criteria"\)/.test(ss), false, 'judging NEVER queries the analysis table')
+  assert.equal(/ai_evaluable/.test(fn), false, 'the shared-flag design is fully reverted')
+})
 
 test('ai-service writes judge_evaluations ONLY as source="ai" and never touches human rows', () => {
   const fn = readFileSync(new URL('supabase/functions/ai-service/index.ts', ROOT), 'utf8')

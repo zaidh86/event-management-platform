@@ -198,6 +198,44 @@ export interface AiFeedbackAnalysis {
   priority: string
 }
 
+// ---- Event Report AI Analysis (00025) ---------------------------------------
+// A criterion system of its own, COMPLETELY separate from judging_criteria:
+// configured on the Analytics page by club authority, read only by the
+// analyze_report task. Mirrors the judging criterion shape minus `required`
+// (there is no finalization step here).
+export interface EventReportAnalysisCriterion {
+  id: string
+  event_id: string
+  name: string
+  description: string
+  ai_instructions: string
+  max_score: number
+  weight: number
+  is_enabled: boolean
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+// returned by the ai-service, never stored
+export interface ReportCriterionResult {
+  criterion_id: string
+  criterion: string
+  max_score: number
+  weight: number
+  suggested_score?: number
+  reasoning?: string
+  evidence?: string[]
+}
+
+export interface EventReportAnalysis {
+  model?: string
+  summary: string
+  strengths: string[]
+  weaknesses: string[]
+  criteria: ReportCriterionResult[]
+}
+
 export interface JudgingResult {
   submission_id: string
   title: string
