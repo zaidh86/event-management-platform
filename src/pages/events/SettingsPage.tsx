@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   assignEventTables, clearEventTables, createQrConfig, deleteEvent, listEventTables, listParticipants,
-  listQrConfigs, listTeams, updateEvent, uploadEventMedia,
+  listQrConfigs, listTeams, removeEventMedia, updateEvent, uploadEventMedia,
 } from '../../lib/api'
 import { formatTable } from '../../lib/tables'
 import { QrConfigManager } from '../../components/QrConfigManager'
@@ -73,6 +73,9 @@ export function SettingsPage() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [confirmParticipation, setConfirmParticipation] = useState(false)
+  // branding removal: which image the confirmation dialog is about
+  const [confirmRemoveImage, setConfirmRemoveImage] = useState<'logo_url' | 'banner_url' | null>(null)
+  const [removingImage, setRemovingImage] = useState(false)
 
   function set<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
     setForm((f) => ({ ...f, [key]: value }))
@@ -210,6 +213,31 @@ export function SettingsPage() {
       toast('success', 'Image updated')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed')
+    }
+  }
+
+  // Removing branding clears the event's reference — the part the UI reads —
+  // and deletes the stored file. Only the uploader may delete the object
+  // (00001 storage policy), so when that is refused the reference is still
+  // cleared and the toast says so rather than pretending the file is gone.
+  async function removeImage(kind: 'logo_url' | 'banner_url') {
+    if (removingImage) return
+    const label = kind === 'logo_url' ? 'Logo' : 'Banner'
+    const current = event[kind]
+    setRemovingImage(true)
+    setError(null)
+    try {
+      const fileDeleted = current ? await removeEventMedia(current) : true
+      await updateEvent(event.id, { [kind]: null })
+      await refresh()
+      setConfirmRemoveImage(null)
+      toast('success', fileDeleted
+        ? `${label} removed`
+        : `${label} removed — the stored file was kept (only the person who uploaded it can delete it)`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Could not remove the ${label.toLowerCase()}`)
+    } finally {
+      setRemovingImage(false)
     }
   }
 
@@ -556,13 +584,29 @@ export function SettingsPage() {
           <div className="media-row">
             {event.logo_url && <img src={event.logo_url} alt="" className="event-logo" />}
             <label className="btn btn-ghost btn-sm file-btn">
-              Upload logo
+              {event.logo_url ? 'Replace logo' : 'Upload logo'}
               <input type="file" accept="image/*" hidden onChange={(e) => void upload('logo_url', e.target.files?.[0])} />
             </label>
+            {event.logo_url && (
+              <button
+                type="button" className="btn btn-ghost btn-sm" disabled={removingImage}
+                onClick={() => setConfirmRemoveImage('logo_url')}
+              >
+                Remove logo
+              </button>
+            )}
             <label className="btn btn-ghost btn-sm file-btn">
-              Upload banner
+              {event.banner_url ? 'Replace banner' : 'Upload banner'}
               <input type="file" accept="image/*" hidden onChange={(e) => void upload('banner_url', e.target.files?.[0])} />
             </label>
+            {event.banner_url && (
+              <button
+                type="button" className="btn btn-ghost btn-sm" disabled={removingImage}
+                onClick={() => setConfirmRemoveImage('banner_url')}
+              >
+                Remove banner
+              </button>
+            )}
           </div>
           {event.banner_url && <img src={event.banner_url} alt="" className="event-banner" />}
         </section>
@@ -617,6 +661,20 @@ export function SettingsPage() {
         {error && <p className="form-error">{error}</p>}
         <button className="btn btn-primary" disabled={busy}>{busy ? 'Saving…' : 'Save settings'}</button>
       </form>
+
+      <ConfirmDialog
+        open={confirmRemoveImage !== null}
+        title={`Remove ${confirmRemoveImage === 'logo_url' ? 'logo' : 'banner'}?`}
+        confirmLabel="Remove"
+        busy={removingImage}
+        onConfirm={() => { if (confirmRemoveImage) void removeImage(confirmRemoveImage) }}
+        onCancel={() => setConfirmRemoveImage(null)}
+      >
+        <p className="muted">
+          The image is deleted from storage and this event stops using it. Every
+          other event setting is untouched, and you can upload a new one at any time.
+        </p>
+      </ConfirmDialog>
 
       <ConfirmDialog
         open={confirmParticipation}

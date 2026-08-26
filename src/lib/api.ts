@@ -1070,6 +1070,30 @@ export async function postAnnouncement(eventId: string, title: string, body: str
 
 // ---- storage ---------------------------------------------------------------
 
+// Public event-media URLs look like
+//   https://<project>.supabase.co/storage/v1/object/public/event-media/<path>
+// Returns the object path, or null when the URL does not point at an
+// event-media object (a row could reference an image hosted elsewhere, which
+// must never be treated as ours to delete).
+export function eventMediaPath(publicUrl: string): string | null {
+  const marker = '/storage/v1/object/public/event-media/'
+  const at = publicUrl.indexOf(marker)
+  if (at === -1) return null
+  const path = publicUrl.slice(at + marker.length).split('?')[0]
+  return path ? decodeURIComponent(path) : null
+}
+
+// Deletes a stored branding image. Best effort by design: the bucket's delete
+// policy admits only the uploader (`owner = auth.uid()`, 00001), so another
+// manager clearing the branding still gets the reference removed — the caller
+// reports whether the file itself went. Returns true when the object is gone.
+export async function removeEventMedia(publicUrl: string): Promise<boolean> {
+  const path = eventMediaPath(publicUrl)
+  if (!path) return false
+  const { error } = await supabase.storage.from('event-media').remove([path])
+  return !error
+}
+
 export async function uploadClubMedia(clubId: string, file: File, kind: string): Promise<string> {
   const ext = file.name.split('.').pop() || 'png'
   const path = `clubs/${clubId}/${kind}-${Date.now()}.${ext}`
