@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { PasswordInput } from '../../components/ui/PasswordInput'
+import { GoogleSignInButton } from '../../components/GoogleSignInButton'
 
 export function LoginPage() {
   const [email, setEmail] = useState('')
@@ -28,6 +29,8 @@ export function LoginPage() {
   return (
     <div className="auth-card">
       <h1>Log in</h1>
+      <GoogleSignInButton onError={setError} />
+      <p className="or-divider" aria-hidden>or</p>
       <form onSubmit={(e) => void onSubmit(e)} className="stack">
         <label>
           Email
