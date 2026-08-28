@@ -807,3 +807,16 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 
 /* ---- Google OAuth button (auth pages) ---- */
 .google-btn { width: 100%; justify-content: center; border-color: var(--border); }
+
+/* ---- registration deadline countdown ---- */
+.reg-countdown {
+  display: grid; gap: var(--s2); justify-items: center; text-align: center;
+  padding: var(--s4); margin-bottom: var(--s2);
+}
+.reg-countdown-label { margin: 0; font-size: var(--fs-3); color: var(--text-muted); }
+.reg-countdown-parts { display: flex; align-items: baseline; gap: var(--s2); flex-wrap: wrap; justify-content: center; }
+.reg-countdown-part { display: inline-grid; justify-items: center; min-width: 3rem; }
+.reg-countdown-part strong { font-size: var(--fs-6); font-variant-numeric: tabular-nums; line-height: 1.15; }
+.reg-countdown-part small { font-size: var(--fs-1); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.reg-countdown-sep { font-size: var(--fs-5); color: var(--text-muted); }
+.reg-countdown-when { margin: 0; font-size: var(--fs-2); }

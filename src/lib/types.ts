@@ -259,6 +259,9 @@ export interface EmpEvent {
   leaderboard_config: LeaderboardConfig
   submission_config: SubmissionConfig
   table_config: TableConfig
+  // optional registration cut-off (00026); null = no deadline, the behaviour
+  // of every event before that migration. Absolute instant (timestamptz).
+  registration_deadline: string | null
   description: string
   status: EventStatus
   is_team_event: boolean

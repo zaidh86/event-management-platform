@@ -34,6 +34,8 @@ function toEvent(row: Record<string, unknown>): EmpEvent {
     is_featured: row.is_featured === true,
     submission_config: normalizeSubmissionConfig(row.submission_config),
     table_config: normalizeTableConfig(row.table_config),
+    // absent on a live DB that predates 00026
+    registration_deadline: (row.registration_deadline as string | undefined) ?? null,
   }
 }
 

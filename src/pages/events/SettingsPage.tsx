@@ -5,6 +5,7 @@ import {
   listQrConfigs, listTeams, removeEventMedia, updateEvent, uploadEventMedia,
 } from '../../lib/api'
 import { formatTable } from '../../lib/tables'
+import { fromDeadlineInput, toDeadlineInput } from '../../lib/registration'
 import { QrConfigManager } from '../../components/QrConfigManager'
 import { ConfirmDialog } from '../../components/ui/Dialog'
 import { useToast } from '../../components/ui/Toast'
@@ -56,6 +57,9 @@ export function SettingsPage() {
   const [subFields, setSubFields] = useState<RegistrationField[]>(sc.fields)
   const [subResults, setSubResults] = useState<'hidden' | 'participants'>(sc.results_visibility)
   const [subAiAssist, setSubAiAssist] = useState(sc.ai_assist)
+
+  // registration deadline (00026) — optional; '' means no deadline
+  const [regDeadline, setRegDeadline] = useState(toDeadlineInput(event.registration_deadline))
 
   // event table allocation (00022)
   const tc = event.table_config
@@ -146,6 +150,7 @@ export function SettingsPage() {
           results_visibility: subResults,
           ai_assist: capJudging && subAiAssist,
         },
+        registration_deadline: fromDeadlineInput(regDeadline),
         table_config: {
           enabled: tblEnabled,
           start_number: Math.max(1, Math.floor(Number(tblStart) || 1)),
@@ -609,6 +614,39 @@ export function SettingsPage() {
             )}
           </div>
           {event.banner_url && <img src={event.banner_url} alt="" className="event-banner" />}
+        </section>
+
+        <section className="card stack">
+          <h3>Registration</h3>
+          <p className="muted">
+            Optional. With a deadline set, participants see a live countdown and
+            registration closes on its own at that moment — the server refuses
+            late registrations even from a page left open. Leave it empty and
+            registration stays open for as long as the event is active.
+          </p>
+          <div className="row">
+            <label>
+              Registration deadline <span className="field-hint">optional</span>
+              <input
+                type="datetime-local"
+                value={regDeadline}
+                onChange={(e) => setRegDeadline(e.target.value)}
+              />
+            </label>
+            {regDeadline !== '' && (
+              <button
+                type="button" className="btn btn-ghost btn-sm"
+                onClick={() => setRegDeadline('')}
+              >
+                Clear deadline
+              </button>
+            )}
+          </div>
+          {regDeadline === '' ? (
+            <p className="muted">No deadline set.</p>
+          ) : new Date(regDeadline).getTime() <= Date.now() ? (
+            <p className="muted">This moment has already passed — participants see “Registration Ended”.</p>
+          ) : null}
         </section>
 
         <section className="card stack">

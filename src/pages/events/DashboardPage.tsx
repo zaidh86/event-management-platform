@@ -14,6 +14,8 @@ import { supabase } from '../../lib/supabase'
 import { fmtDateTime, fmtPoints, fmtSigned } from '../../lib/format'
 import { myQrConfigs, publicQrUrl } from '../../lib/qr'
 import { formatTable } from '../../lib/tables'
+import { registrationClosed } from '../../lib/registration'
+import { RegistrationCountdown } from '../../components/RegistrationCountdown'
 import { deadlinePassed } from '../../lib/submissions'
 import { QRCard } from '../../components/QRCard'
 import { Skeleton } from '../../components/ui/Skeleton'
@@ -49,6 +51,15 @@ function RegisterFlow() {
   const [mode, setMode] = useState<ParticipationMode | null>(singleMode)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Registration deadline (00026). Derived synchronously from the stored
+  // instant, so a page opened after the deadline renders the closed state on
+  // its very first paint — never a flash of an active Register button.
+  const deadline = event.registration_deadline
+  const [closed, setClosed] = useState(() => registrationClosed(event))
+  // re-derive when the organizer clears or moves the deadline
+  useEffect(() => {
+    setClosed(registrationClosed({ registration_deadline: deadline }))
+  }, [deadline])
 
   if (event.status !== 'active') {
     return (
@@ -57,6 +68,26 @@ function RegisterFlow() {
       </div>
     )
   }
+  // deadline reached: one closed state for everyone — signed in or not, mid
+  // form or arriving fresh. The server enforces the same rule independently.
+  if (closed) {
+    return (
+      <div className="page page-narrow">
+        <div className="card stack register-cta">
+          <h2>{event.name}</h2>
+          <p className="muted">
+            Registration closed{deadline ? ` on ${fmtDateTime(deadline)}` : ''}.
+          </p>
+          <div className="row">
+            <button type="button" className="btn btn-primary" disabled>
+              Registration Ended
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   // public-first: browsing never forces authentication — the moment someone
   // decides to participate is when an account becomes necessary
   if (!session) {
@@ -101,6 +132,12 @@ function RegisterFlow() {
 
   async function onRegister() {
     if (!mode || busy) return
+    // the deadline may have passed while this form sat open; the RPC refuses
+    // it anyway, this just avoids a pointless round trip
+    if (registrationClosed({ registration_deadline: deadline })) {
+      setClosed(true)
+      return
+    }
     setBusy(true)
     setError(null)
     try {
@@ -122,6 +159,7 @@ function RegisterFlow() {
       <div className="page page-narrow">
         <p className="step-kicker">Registration · step 1 of 2</p>
         <h2>Register for {event.name}</h2>
+        {deadline && <RegistrationCountdown deadline={deadline} onExpire={() => setClosed(true)} />}
         <form onSubmit={onFieldsNext} className="stack card">
           <label>
             Display name <span className="field-hint">Write your Full Name</span>
@@ -160,6 +198,7 @@ function RegisterFlow() {
     <div className="page page-narrow">
       <p className="step-kicker">Registration · step 2 of 2</p>
       <h2>How would you like to participate?</h2>
+      {deadline && <RegistrationCountdown deadline={deadline} onExpire={() => setClosed(true)} />}
       <div className="mode-grid">
         {availableSolo && (
           <button
