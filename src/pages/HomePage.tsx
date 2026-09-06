@@ -56,7 +56,7 @@ export function HomePage() {
   return (
     <div className="page">
       <div className="page-head">
-        <h1>{session ? (firstName ? `Welcome back, ${firstName}` : 'Welcome back') : 'Welcome to EMP'}</h1>
+        <h1>{session ? (firstName ? `Welcome back, ${firstName}!` : 'Welcome back') : 'Welcome to EMP'}</h1>
         {isSuperAdmin && <Link to="/clubs/new" className="btn btn-primary">Create club</Link>}
       </div>
       {error && <p className="form-error">{error}</p>}
